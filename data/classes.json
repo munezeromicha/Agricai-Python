@@ -1,0 +1,74 @@
+{
+  "classes": [
+    {
+      "class_id": "tomato_late_blight",
+      "type": "disease",
+      "diseaseName": "Tomato Late Blight",
+      "diseaseNameRw": "Icyorezo cy'Inyanya",
+      "explanation": "Late blight is caused by the oomycete pathogen Phytophthora infestans. It appears as dark, water-soaked spots on leaves that quickly enlarge and turn brown with a white fuzzy growth on undersides.",
+      "explanationRw": "Icyorezo cy'ubucuruzi giterwa na Phytophthora infestans. Kigaragara nk'utudomo tw'umukara ku mababi binyura vuba bikaba ibara ry'ikigina.",
+      "treatment": "Apply copper-based fungicide (e.g., Copper hydroxide 77% WP) at 2.5g/L immediately. Remove and destroy all affected plant parts. Spray every 7-10 days during wet weather.",
+      "treatmentRw": "Shyira umuti wa copper (urugero, Copper hydroxide 77% WP) ku 2.5g/L ako kanya. Kuraho no gusenya ibice byose by'igihingwa byangiritse.",
+      "prevention": "Use certified disease-free seeds. Practice crop rotation (3-year cycle). Ensure proper spacing (60cm between plants). Avoid overhead irrigation. Plant resistant varieties like Shanty F1.",
+      "preventionRw": "Koresha imbuto zemejwe zidafite indwara. Kora guhindura ibihingwa (uruziga rw'imyaka 3). Usige umwanya uhagije (cm 60 hagati y'ibihingwa).",
+      "care": "Monitor plants daily during rainy season. Maintain good airflow by pruning lower leaves. Mulch around base to prevent soil splash. Harvest promptly when fruit is ripe.",
+      "careRw": "Kurikirana ibihingwa buri munsi mu gihe cy'imvura. Komeza umuyaga mwiza ukata amababi yo hasi. Shyira ibyatsi hafi y'umushinge."
+    },
+    {
+      "class_id": "tomato_healthy",
+      "type": "healthy",
+      "diseaseName": "Healthy Tomato",
+      "diseaseNameRw": "Inyanya Izima",
+      "explanation": "Leaves appear normal in color and texture with no signs of spots, wilting, or pest damage.",
+      "explanationRw": "Amababi aragaragara neza mu ibara no mu buryo nta bimenyetso by'utudomo, gucurika, cyangwa ibyonnyi.",
+      "treatment": "No treatment needed. Continue routine monitoring and good agricultural practices.",
+      "treatmentRw": "Nta muti ukenewe. Komeza kurikirana no gukoresha uburyo bwiza bwo guhinga.",
+      "prevention": "Keep balanced nutrition, avoid overhead watering, and scout weekly for early symptoms.",
+      "preventionRw": "Komeza indyo ihagije, wirinde kuhira hejuru, kandi usuzume buri cyumweru kugira ngo umenye kare ibimenyetso.",
+      "care": "Maintain consistent watering at the base, stake plants if needed, and remove only yellowed lower leaves.",
+      "careRw": "Komeza kuhira ku mushinge, tega ibihingwa nibiba, kandi ukure amababi ya kigina gusa."
+    },
+    {
+      "class_id": "potato_early_blight",
+      "type": "disease",
+      "diseaseName": "Potato Early Blight",
+      "diseaseNameRw": "Indwara ya Blight ku Birayi",
+      "explanation": "Early blight (Alternaria solani) causes concentric ring spots on older leaves, often with a yellow halo.",
+      "explanationRw": "Early blight (Alternaria solani) itera utudomo tw'uruziga ku mababi makuru, akenshi hamwe n'igitare cy'icyera.",
+      "treatment": "Apply registered fungicides per label; improve airflow; remove heavily infected foliage.",
+      "treatmentRw": "Shyira imiti yemewe ukurikije ibisobanuro; teza umuyaga; ukure amababi menshi yandujwe.",
+      "prevention": "Rotate crops, use clean seed tubers, and avoid prolonged leaf wetness.",
+      "preventionRw": "Hindura ibihingwa, koresha ibirayi by'indabyo, wirinda ko amababi ahagarara ameze nabi.",
+      "care": "Fertilize appropriately; irrigate at soil level; destroy crop debris after harvest.",
+      "careRw": "Shyira ifumbire neza; uhira ku butaka; usenye ibisigarira by'isarura."
+    },
+    {
+      "class_id": "coffee_leaf_rust",
+      "type": "disease",
+      "diseaseName": "Coffee Leaf Rust",
+      "diseaseNameRw": "Indwara ya Rust ku Kawa",
+      "explanation": "Orange-yellow powdery lesions on leaf undersides are typical of coffee leaf rust (Hemileia vastatrix).",
+      "explanationRw": "Utudomo tw'umuhondo tw'ibumbe ku mababi hasi ni bimenyetso bya rust ku kawa (Hemileia vastatrix).",
+      "treatment": "Use extension-approved fungicide programs; prune for penetration; follow local regulations.",
+      "treatmentRw": "Koresha gahunda y'imiti yemewe; sasa kugira ngo imiti ingane; ukurikize amategeko yo mu karere.",
+      "prevention": "Plant resistant cultivars where available; improve shade and nutrition management.",
+      "preventionRw": "Shinga ibihingwa byihariye nibiboneka; teza igicucu no gucunga ifumbire.",
+      "care": "Monitor after rain; remove fallen infected leaves from under trees when advised.",
+      "careRw": "Kurikirana nyuma y'imvura; ukure amababi yandujwe hasi y'ibiti nimbi byifuzwa."
+    },
+    {
+      "class_id": "unknown",
+      "type": "unknown",
+      "diseaseName": "Uncertain diagnosis",
+      "diseaseNameRw": "Ntibizwi neza",
+      "explanation": "The image could not be matched with high confidence. Try a clearer photo of the affected leaf, closer and in natural light, or consult a local extension officer.",
+      "explanationRw": "Ifoto ntishobora guhuza n'ukuri guhanitse. Gerageza ifoto yizewe y'ikibabi cyangiritse, hafi, mu mucyo wa kare, cyangwa uvugane n'umukozi w'ubufasha mu buhinzi.",
+      "treatment": "Avoid guessing treatments. Seek expert advice before applying chemicals.",
+      "treatmentRw": "Wirinda gutunga umuti utazi. Shakisha inama y'impuguke mbere yo gukoresha imiti.",
+      "prevention": "Regular scouting and good field hygiene reduce surprises; keep records of symptoms.",
+      "preventionRw": "Gusuzuma buri gihe no kwita ku isuku byo ku murima byagabanya ibibazo; andika ibimenyetso.",
+      "care": "Isolate suspicious plants if possible and monitor spread; note weather conditions when symptoms appeared.",
+      "careRw": "Shyira ku ruhande ibihingwa bitewe amakenga nimbishoboka; kurikirana; andika imvura n'ikirere."
+    }
+  ]
+}
