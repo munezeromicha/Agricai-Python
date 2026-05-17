@@ -4,12 +4,24 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
-$Uvicorn = Join-Path $Root ".venv\Scripts\uvicorn.exe"
-if (-not (Test-Path $Uvicorn)) {
+$dirs = @()
+if ($env:VENV_DIR) { $dirs += $env:VENV_DIR }
+$dirs += ".venv", "venv"
+
+$Uvicorn = $null
+foreach ($dir in $dirs) {
+    $candidate = Join-Path $Root "$dir\Scripts\uvicorn.exe"
+    if (Test-Path $candidate) {
+        $Uvicorn = $candidate
+        break
+    }
+}
+
+if (-not $Uvicorn) {
     Write-Error @"
-Missing $Uvicorn. Create the venv and install deps:
-  python -m venv .venv
-  .\.venv\Scripts\pip install -r requirements.txt
+No venv uvicorn found under .venv or venv. Create one and install deps:
+  python -m venv venv
+  .\venv\Scripts\pip install -r requirements.txt
 "@
 }
 

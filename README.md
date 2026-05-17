@@ -53,12 +53,12 @@ pm2 start ecosystem.config.cjs
 pm2 save
 ```
 
-`ecosystem.config.cjs` runs `.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000` with `cwd` set to the repo root.
+`ecosystem.config.cjs` auto-detects **`venv/`** or **`.venv/`** (whichever exists) and runs `python -m uvicorn app.main:app`. Override with `VENV_DIR=venv pm2 start ecosystem.config.cjs` if needed.
 
-Manual equivalent (note **`app.main:app`**, not `main:app`):
+Manual equivalent (note **`app.main:app`**, not `main:app`; use `venv` or `.venv` to match your folder):
 
 ```bash
-pm2 start .venv/bin/uvicorn \
+pm2 start venv/bin/uvicorn \
   --name Agricai-Python \
   --cwd /root/backend/Agricai/Agricai-Python \
   -- app.main:app --host 0.0.0.0 --port 8000

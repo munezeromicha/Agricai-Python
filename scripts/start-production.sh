@@ -6,10 +6,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-UVICORN="${ROOT}/.venv/bin/uvicorn"
-if [[ ! -x "$UVICORN" ]]; then
-  echo "Missing ${UVICORN}. Create the venv and install deps:" >&2
-  echo "  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
+UVICORN=""
+for dir in ${VENV_DIR:-} .venv venv; do
+  [[ -z "$dir" ]] && continue
+  candidate="${ROOT}/${dir}/bin/uvicorn"
+  if [[ -x "$candidate" ]]; then
+    UVICORN="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$UVICORN" ]]; then
+  echo "No venv uvicorn found (tried .venv and venv under ${ROOT})." >&2
+  echo "  python3 -m venv venv && venv/bin/pip install -r requirements.txt" >&2
   exit 1
 fi
 
