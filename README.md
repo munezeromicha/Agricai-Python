@@ -44,25 +44,25 @@ Do **not** use `main:app` — there is no `main.py` at the repository root.
 
 2. Copy `.env` and set `INFERENCE_MODE`, `MODEL_PATH`, `CORS_ORIGINS`, etc.
 
-3. Remove any broken PM2 process, then start with the checked-in config:
+3. Start **one** process (recommended — deletes any old `Agricai-Python` first):
 
 ```bash
 cd /root/backend/Agricai/Agricai-Python
+chmod +x scripts/pm2-deploy.sh
+./scripts/pm2-deploy.sh
+```
+
+Or manually:
+
+```bash
 pm2 delete Agricai-Python 2>/dev/null || true
 pm2 start ecosystem.config.cjs
 pm2 save
 ```
 
-`ecosystem.config.cjs` auto-detects **`venv/`** or **`.venv/`** (whichever exists) and runs `python -m uvicorn app.main:app`. Override with `VENV_DIR=venv pm2 start ecosystem.config.cjs` if needed.
+`ecosystem.config.cjs` auto-detects **`venv/`** or **`.venv/`** and runs `python -m uvicorn app.main:app`.
 
-Manual equivalent (note **`app.main:app`**, not `main:app`; use `venv` or `.venv` to match your folder):
-
-```bash
-pm2 start venv/bin/uvicorn \
-  --name Agricai-Python \
-  --cwd /root/backend/Agricai/Agricai-Python \
-  -- app.main:app --host 0.0.0.0 --port 8000
-```
+**Do not** run `pm2 start` again while `Agricai-Python` is already online — PM2 allows duplicate names; the second instance will crash with **address already in use** on port 8000. Use `pm2 restart Agricai-Python` or `./scripts/pm2-deploy.sh` instead.
 
 Smoke test:
 

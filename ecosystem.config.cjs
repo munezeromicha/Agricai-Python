@@ -1,6 +1,7 @@
 /**
  * PM2 production config. From project root:
  *
+ *   ./scripts/pm2-deploy.sh   (preferred — removes duplicates first)
  *   pm2 start ecosystem.config.cjs
  *   pm2 logs Agricai-Python
  *   pm2 save
