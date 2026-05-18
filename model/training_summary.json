@@ -1,0 +1,326 @@
+{
+  "class_names": [
+    "Anthracnose",
+    "Beans_angular_leaf_spot",
+    "Beans_healthy",
+    "Beans_rust",
+    "Bulb Rot",
+    "Maize_Blight",
+    "Maize_Common_Rust",
+    "Maize_Gray_Leaf_Spot",
+    "Maize_Healthy",
+    "Mango_Anthracnose",
+    "Mango_Gall Midge",
+    "Mango_Healthy",
+    "Mango_Powdery Mildew",
+    "Onion_Caterpillar-P",
+    "Onion_Downy mildew",
+    "Onion_Fusarium-D",
+    "Onion_Healthy leaves",
+    "Onion_Iris yellow virus_augment",
+    "Onion_Purple blotch",
+    "Onion_Rust",
+    "Onion_Virosis-D",
+    "Onion_stemphylium Leaf Blight",
+    "Orange_disease_canker",
+    "Orange_disease_fresh",
+    "Orange_disease_grenning",
+    "Potato___Early_blight",
+    "Potato___Late_blight",
+    "Potato___healthy",
+    "Tomato___Early_blight",
+    "Tomato___Late_blight",
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
+    "Tomato___Tomato_mosaic_virus",
+    "Tomato___healthy",
+    "algal leaf",
+    "bird eye spot",
+    "brown blight",
+    "gray light",
+    "healthy",
+    "red leaf spot",
+    "white spot"
+  ],
+  "img_size": 224,
+  "normalization": {
+    "scale": "divide_by_255",
+    "mean": [
+      0.48500001430511475,
+      0.4560000002384186,
+      0.4059999883174896
+    ],
+    "std": [
+      0.2290000021457672,
+      0.2240000069141388,
+      0.22499999403953552
+    ],
+    "layout": "NCHW for ONNX in Agricai-Python"
+  },
+  "metrics": {
+    "val_loss": 0.06246698275208473,
+    "val_accuracy": 0.9791874885559082,
+    "classification_report": {
+      "Anthracnose": {
+        "precision": 0.9320388349514563,
+        "recall": 0.96,
+        "f1-score": 0.9458128078817734,
+        "support": 100.0
+      },
+      "Beans_angular_leaf_spot": {
+        "precision": 0.9936908517350158,
+        "recall": 0.9545454545454546,
+        "f1-score": 0.973724884080371,
+        "support": 330.0
+      },
+      "Beans_healthy": {
+        "precision": 0.9939577039274925,
+        "recall": 0.996969696969697,
+        "f1-score": 0.9954614220877458,
+        "support": 330.0
+      },
+      "Beans_rust": {
+        "precision": 0.9590643274853801,
+        "recall": 0.9939393939393939,
+        "f1-score": 0.9761904761904762,
+        "support": 330.0
+      },
+      "Bulb Rot": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 7.0
+      },
+      "Maize_Blight": {
+        "precision": 0.9583778014941302,
+        "recall": 0.9016064257028112,
+        "f1-score": 0.9291257113295396,
+        "support": 996.0
+      },
+      "Maize_Common_Rust": {
+        "precision": 0.9878787878787879,
+        "recall": 0.9868819374369324,
+        "f1-score": 0.9873801110550228,
+        "support": 991.0
+      },
+      "Maize_Gray_Leaf_Spot": {
+        "precision": 0.8591549295774648,
+        "recall": 0.9564459930313589,
+        "f1-score": 0.9051937345424568,
+        "support": 574.0
+      },
+      "Maize_Healthy": {
+        "precision": 1.0,
+        "recall": 0.9990049751243781,
+        "f1-score": 0.9995022399203584,
+        "support": 1005.0
+      },
+      "Mango_Anthracnose": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 500.0
+      },
+      "Mango_Gall Midge": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 500.0
+      },
+      "Mango_Healthy": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 500.0
+      },
+      "Mango_Powdery Mildew": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 500.0
+      },
+      "Onion_Caterpillar-P": {
+        "precision": 1.0,
+        "recall": 0.997,
+        "f1-score": 0.9984977466199298,
+        "support": 1000.0
+      },
+      "Onion_Downy mildew": {
+        "precision": 0.7708333333333334,
+        "recall": 1.0,
+        "f1-score": 0.8705882352941177,
+        "support": 37.0
+      },
+      "Onion_Fusarium-D": {
+        "precision": 0.9948875255623721,
+        "recall": 0.973,
+        "f1-score": 0.9838220424671386,
+        "support": 1000.0
+      },
+      "Onion_Healthy leaves": {
+        "precision": 0.9197012138188608,
+        "recall": 0.9949494949494949,
+        "f1-score": 0.9558466763706939,
+        "support": 990.0
+      },
+      "Onion_Iris yellow virus_augment": {
+        "precision": 0.9610655737704918,
+        "recall": 0.938,
+        "f1-score": 0.9493927125506073,
+        "support": 1000.0
+      },
+      "Onion_Purple blotch": {
+        "precision": 0.9928656361474435,
+        "recall": 0.9858323494687131,
+        "f1-score": 0.9893364928909952,
+        "support": 847.0
+      },
+      "Onion_Rust": {
+        "precision": 0.9726027397260274,
+        "recall": 1.0,
+        "f1-score": 0.9861111111111112,
+        "support": 213.0
+      },
+      "Onion_Virosis-D": {
+        "precision": 0.9941747572815534,
+        "recall": 1.0,
+        "f1-score": 0.997078870496592,
+        "support": 512.0
+      },
+      "Onion_stemphylium Leaf Blight": {
+        "precision": 0.9905561385099685,
+        "recall": 0.944,
+        "f1-score": 0.9667178699436764,
+        "support": 1000.0
+      },
+      "Orange_disease_canker": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 179.0
+      },
+      "Orange_disease_fresh": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 281.0
+      },
+      "Orange_disease_grenning": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 347.0
+      },
+      "Potato___Early_blight": {
+        "precision": 0.9871668311944719,
+        "recall": 1.0,
+        "f1-score": 0.9935419771485345,
+        "support": 1000.0
+      },
+      "Potato___Late_blight": {
+        "precision": 0.9848484848484849,
+        "recall": 0.975,
+        "f1-score": 0.9798994974874372,
+        "support": 1000.0
+      },
+      "Potato___healthy": {
+        "precision": 0.9212121212121213,
+        "recall": 1.0,
+        "f1-score": 0.9589905362776026,
+        "support": 152.0
+      },
+      "Tomato___Early_blight": {
+        "precision": 0.9660339660339661,
+        "recall": 0.967,
+        "f1-score": 0.9665167416291854,
+        "support": 1000.0
+      },
+      "Tomato___Late_blight": {
+        "precision": 0.981404958677686,
+        "recall": 0.95,
+        "f1-score": 0.9654471544715447,
+        "support": 1000.0
+      },
+      "Tomato___Tomato_Yellow_Leaf_Curl_Virus": {
+        "precision": 0.996993987975952,
+        "recall": 0.995,
+        "f1-score": 0.995995995995996,
+        "support": 1000.0
+      },
+      "Tomato___Tomato_mosaic_virus": {
+        "precision": 0.997002997002997,
+        "recall": 0.998,
+        "f1-score": 0.9975012493753124,
+        "support": 1000.0
+      },
+      "Tomato___healthy": {
+        "precision": 0.9871668311944719,
+        "recall": 1.0,
+        "f1-score": 0.9935419771485345,
+        "support": 1000.0
+      },
+      "algal leaf": {
+        "precision": 1.0,
+        "recall": 0.9734513274336283,
+        "f1-score": 0.9865470852017937,
+        "support": 113.0
+      },
+      "bird eye spot": {
+        "precision": 0.979381443298969,
+        "recall": 0.95,
+        "f1-score": 0.9644670050761421,
+        "support": 100.0
+      },
+      "brown blight": {
+        "precision": 1.0,
+        "recall": 0.9380530973451328,
+        "f1-score": 0.9680365296803652,
+        "support": 113.0
+      },
+      "gray light": {
+        "precision": 0.98,
+        "recall": 0.98,
+        "f1-score": 0.98,
+        "support": 100.0
+      },
+      "healthy": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 74.0
+      },
+      "red leaf spot": {
+        "precision": 1.0,
+        "recall": 0.986013986013986,
+        "f1-score": 0.9929577464788732,
+        "support": 143.0
+      },
+      "white spot": {
+        "precision": 0.922077922077922,
+        "recall": 1.0,
+        "f1-score": 0.9594594594594594,
+        "support": 142.0
+      },
+      "accuracy": 0.979187494319731,
+      "macro avg": {
+        "precision": 0.9746034924679204,
+        "recall": 0.9823673532990245,
+        "f1-score": 0.9778171525065847,
+        "support": 22006.0
+      },
+      "weighted avg": {
+        "precision": 0.9799370657169955,
+        "recall": 0.979187494319731,
+        "f1-score": 0.9792668308978083,
+        "support": 22006.0
+      }
+    }
+  },
+  "deploy": {
+    "INFERENCE_MODE": "onnx",
+    "MODEL_PATH": "path/to/crop_classifier.onnx",
+    "MODEL_VERSION": "1.0.0",
+    "INPUT_SIZE": 224,
+    "CONFIDENCE_THRESHOLD": 0.35,
+    "onnx_output": "logits shape [1, 40]"
+  }
+}

@@ -10,17 +10,41 @@ from PIL import Image
 
 from app.config import Settings, get_settings
 from app.inference.knowledge import KnowledgeBase
+from app.inference.plant_guard import looks_like_crop_leaf_photo
 from app.schemas import DetectResponse, DetectionResult
 
 
-def _preprocess_imagenet(image: Image.Image, size: int) -> np.ndarray:
+def _channel_dim_index(shape: tuple) -> int | None:
+    """Return axis index (1..3) where channel size is 3, for 4D ONNX inputs."""
+    if len(shape) != 4:
+        return None
+    for i in (1, 2, 3):
+        dim = shape[i]
+        if dim == 3 or dim == "3":
+            return i
+    return None
+
+
+def _infer_onnx_layout(input_shape: tuple) -> str:
+    """Keras/tf2onnx exports use NHWC [N,H,W,3]; some ONNX models use NCHW [N,3,H,W]."""
+    ch = _channel_dim_index(input_shape)
+    if ch == 1:
+        return "nchw"
+    if ch == 3:
+        return "nhwc"
+    # Dynamic shapes from Keras often look like (batch, 224, 224, 3)
+    return "nhwc"
+
+
+def _preprocess_imagenet(image: Image.Image, size: int, layout: str = "nhwc") -> np.ndarray:
     image = image.convert("RGB")
     image = image.resize((size, size), Image.Resampling.BILINEAR)
     arr = np.asarray(image, dtype=np.float32) / 255.0
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-    arr = (arr - mean) / std
-    arr = np.transpose(arr, (2, 0, 1))
+    arr = (arr - mean) / std  # HWC
+    if layout == "nchw":
+        arr = np.transpose(arr, (2, 0, 1))
     return np.expand_dims(arr, axis=0)
 
 
@@ -29,6 +53,47 @@ def _softmax(x: np.ndarray) -> np.ndarray:
     x = x - np.max(x, axis=-1, keepdims=True)
     ex = np.exp(x)
     return (ex / np.sum(ex, axis=-1, keepdims=True)).astype(np.float32)
+
+
+def _prediction_is_uncertain(
+    probs: np.ndarray,
+    *,
+    min_confidence: float,
+    min_margin: float,
+) -> tuple[bool, float, float]:
+    """
+  Decide if we should show a specific disease vs the generic "unknown" entry.
+
+  Rules (all must pass to accept a label):
+    1. Top score >= min_confidence (default 65%) — blocks weak guesses on non-leaf images.
+    2. Top score - second score >= min_margin (default 12%) — blocks "almost tied" guesses.
+    """
+    if probs.size == 0:
+        return True, 0.0, 0.0
+
+    order = np.argsort(probs)[::-1]
+    top_p = float(probs[order[0]])
+    second_p = float(probs[order[1]]) if probs.size > 1 else 0.0
+    margin = top_p - second_p
+
+    if top_p < min_confidence:
+        return True, top_p, margin
+    if margin < min_margin:
+        return True, top_p, margin
+    return False, top_p, margin
+
+
+def _reject_unknown(kb: KnowledgeBase, confidence_pct: float = 0.0) -> tuple[DetectionResult, str]:
+    unk = kb.get("unknown")
+    return kb.to_detection(unk, confidence_pct), "unknown"
+
+
+def _plant_guard_reject(settings: Settings, kb: KnowledgeBase, image: Image.Image) -> tuple[DetectionResult, str] | None:
+    if not settings.plant_guard_enabled:
+        return None
+    if looks_like_crop_leaf_photo(image):
+        return None
+    return _reject_unknown(kb, 0.0)
 
 
 class InferenceEngine(ABC):
@@ -54,6 +119,9 @@ class StubEngine(InferenceEngine):
             self._rotating = list(kb.class_ids)
 
     def predict(self, image: Image.Image) -> tuple[DetectionResult, str | None]:
+        blocked = _plant_guard_reject(self._settings, self.kb, image)
+        if blocked is not None:
+            return blocked
         buf = image.tobytes()
         h = int(hashlib.sha256(buf).hexdigest(), 16)
         idx = h % len(self._rotating) if self._rotating else 0
@@ -79,31 +147,38 @@ class OnnxEngine(InferenceEngine):
         )
         inp = self._session.get_inputs()[0]
         self._input_name = inp.name
+        self._input_layout = _infer_onnx_layout(tuple(inp.shape))
         outs = self._session.get_outputs()
         self._output_name = outs[0].name
-        self._expected_classes = kb.num_classes
+        self._trainable_ids = kb.trainable_class_ids
+        self._expected_classes = kb.num_trainable_classes
 
     def predict(self, image: Image.Image) -> tuple[DetectionResult, str | None]:
-        x = _preprocess_imagenet(image, self._settings.input_size)
+        blocked = _plant_guard_reject(self._settings, self.kb, image)
+        if blocked is not None:
+            return blocked
+
+        x = _preprocess_imagenet(
+            image, self._settings.input_size, layout=self._input_layout
+        )
         logits = self._session.run([self._output_name], {self._input_name: x.astype(np.float32)})[0]
         probs = _softmax(logits[0])
         if probs.shape[0] != self._expected_classes:
-            unk = self.kb.get("unknown")
-            return self.kb.to_detection(unk, 0.0), "unknown"
+            return _reject_unknown(self.kb, 0.0)
 
         best_i = int(np.argmax(probs))
-        max_p = float(probs[best_i])
-        class_ids = self.kb.class_ids
-        if best_i >= len(class_ids):
-            unk = self.kb.get("unknown")
-            return self.kb.to_detection(unk, 0.0), "unknown"
+        if best_i >= len(self._trainable_ids):
+            return _reject_unknown(self.kb, 0.0)
 
-        class_id = class_ids[best_i]
-        if max_p < self._settings.confidence_threshold:
-            unk = self.kb.get("unknown")
-            # Keep raw max probability as hint in UI if you later expose it
-            return self.kb.to_detection(unk, max_p * 100.0), "unknown"
+        uncertain, max_p, _margin = _prediction_is_uncertain(
+            probs,
+            min_confidence=self._settings.confidence_threshold,
+            min_margin=self._settings.confidence_margin,
+        )
+        if uncertain:
+            return _reject_unknown(self.kb, max_p * 100.0)
 
+        class_id = self._trainable_ids[best_i]
         entry = self.kb.get(class_id)
         return self.kb.to_detection(entry, max_p * 100.0), class_id
 
@@ -116,9 +191,9 @@ def get_engine(settings: Settings | None = None) -> InferenceEngine:
     if mode == "onnx":
         if not settings.model_path:
             raise RuntimeError("INFERENCE_MODE=onnx requires MODEL_PATH to an .onnx file.")
-        path = Path(settings.model_path)
-        if not path.is_file():
-            raise FileNotFoundError(f"MODEL_PATH not found: {path}")
+        path = settings.resolved_model_path()
+        if path is None or not path.is_file():
+            raise FileNotFoundError(f"MODEL_PATH not found: {settings.model_path}")
         return OnnxEngine(kb, settings, path)
 
     return StubEngine(kb, settings)

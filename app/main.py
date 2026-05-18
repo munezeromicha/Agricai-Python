@@ -59,7 +59,10 @@ def create_app() -> FastAPI:
             model_version=settings.model_version,
             inference_mode=settings.inference_mode,
             input_size=settings.input_size,
-            num_classes=_engine.kb.num_classes,
+            num_classes=_engine.kb.num_trainable_classes,
+            plant_guard_enabled=settings.plant_guard_enabled,
+            confidence_threshold=settings.confidence_threshold,
+            confidence_margin=settings.confidence_margin,
         )
 
     @app.post("/v1/detect", response_model=DetectResponse)

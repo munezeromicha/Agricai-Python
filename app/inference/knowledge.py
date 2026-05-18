@@ -49,8 +49,17 @@ class KnowledgeBase:
         return list(self._order)
 
     @property
+    def trainable_class_ids(self) -> list[str]:
+        """Classes the vision model may predict (excludes knowledge-only ``unknown``)."""
+        return [cid for cid in self._order if cid != "unknown" and self._by_id[cid].type != "unknown"]
+
+    @property
     def num_classes(self) -> int:
         return len(self._order)
+
+    @property
+    def num_trainable_classes(self) -> int:
+        return len(self.trainable_class_ids)
 
     def get(self, class_id: str) -> ClassEntry:
         return self._by_id[class_id]

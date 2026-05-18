@@ -1,0 +1,8 @@
+# Vision API (PM2 / uvicorn on :8000). Merge into your main Caddyfile or:
+#   caddy run --config /path/to/Caddyfile
+#
+# Caddy obtains HTTPS for ai.agric-ai.com automatically.
+
+ai.agric-ai.com {
+	reverse_proxy 127.0.0.1:8000
+}

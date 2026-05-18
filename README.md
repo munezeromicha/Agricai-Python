@@ -79,9 +79,9 @@ Put **Caddy** (or another reverse proxy) in front of port `8000` for `ml.agric-a
 
 ## ONNX model
 
-1. Export a classifier that outputs **logits** with shape `[1, N]` where **N equals** the number of entries in `data/classes.json` (class index `i` must match row `i` in that file).
+1. Export a classifier that outputs **logits** with shape `[1, N]` where **N equals** the number of **trainable** entries in `data/classes.json` (all rows except `unknown`). Class index `i` must match the `i`th trainable `class_id` in file order.
 2. Set `INFERENCE_MODE=onnx`, `MODEL_PATH=...`, and `MODEL_VERSION=...` in `.env`.
-3. Preprocessing matches common ImageNet settings: resize to `INPUT_SIZE`, RGB, mean `[0.485, 0.456, 0.406]`, std `[0.229, 0.224, 0.225]`, NCHW float32. Change `app/inference/engine.py` if your training recipe differs.
+3. Preprocessing matches training: resize to `INPUT_SIZE`, RGB, `/255`, ImageNet mean/std. Layout is inferred from the ONNX input shape (Keras exports are usually **NHWC** `[1,224,224,3]`). Change `app/inference/engine.py` if your export differs.
 
 ## Knowledge base
 
