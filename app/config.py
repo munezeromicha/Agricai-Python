@@ -23,12 +23,14 @@ class Settings(BaseSettings):
     # ImageNet-style preprocessing (change if your training recipe differs)
     input_size: int = 224
 
-    # Reject prediction when top softmax score is below this (0–1). Use ~0.65+ to block
-    # non-plant photos that still get a weak best-guess label (e.g. a house → 54% "healthy").
-    confidence_threshold: float = 0.65
+    # Reject when top softmax score is below this (0–1). ~0.55–0.60 balances field photos vs junk.
+    confidence_threshold: float = 0.58
 
-    # Top class must beat the runner-up by at least this margin (0–1), or we return unknown.
-    confidence_margin: float = 0.18
+    # Top class must beat runner-up by at least this margin (0–1), or return unknown.
+    confidence_margin: float = 0.10
+
+    # Average logits over flipped/cropped views — improves phone-photo generalization.
+    tta_enabled: bool = True
 
     # Run color/contrast checks before ONNX — blocks terminals, houses, documents, etc.
     plant_guard_enabled: bool = True

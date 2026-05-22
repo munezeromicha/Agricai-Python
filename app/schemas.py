@@ -3,6 +3,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 DiseaseType = Literal["healthy", "disease", "pest", "unknown"]
+RejectionReason = Literal[
+    "plant_guard", "low_confidence", "low_margin", "class_count_mismatch"
+]
 
 
 class DetectionResult(BaseModel):
@@ -22,6 +25,12 @@ class DetectionResult(BaseModel):
     careRw: str
 
 
+class ClassAlternative(BaseModel):
+    class_id: str
+    disease_name: str
+    confidence: float = Field(..., ge=0, le=100)
+
+
 class DetectResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
@@ -30,6 +39,10 @@ class DetectResponse(BaseModel):
     request_id: str
     inference_mode: str
     top_class_id: str | None = None
+    rejection_reason: RejectionReason | None = None
+    alternatives: list[ClassAlternative] = Field(default_factory=list)
+    top_confidence_pct: float | None = None
+    confidence_margin_pct: float | None = None
 
 
 class HealthResponse(BaseModel):
@@ -48,5 +61,6 @@ class ModelInfoResponse(BaseModel):
     input_size: int
     num_classes: int
     plant_guard_enabled: bool = True
-    confidence_threshold: float = 0.65
-    confidence_margin: float = 0.12
+    tta_enabled: bool = True
+    confidence_threshold: float = 0.58
+    confidence_margin: float = 0.10

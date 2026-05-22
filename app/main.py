@@ -61,6 +61,7 @@ def create_app() -> FastAPI:
             input_size=settings.input_size,
             num_classes=_engine.kb.num_trainable_classes,
             plant_guard_enabled=settings.plant_guard_enabled,
+            tta_enabled=settings.tta_enabled,
             confidence_threshold=settings.confidence_threshold,
             confidence_margin=settings.confidence_margin,
         )

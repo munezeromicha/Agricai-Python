@@ -38,6 +38,8 @@ Do **not** use `main:app` — there is no `main.py` at the repository root.
 - Detect: `POST http://localhost:8000/v1/detect` — form field `file` (image)
 - Model metadata: `GET http://localhost:8000/v1/models`
 
+**Field photos vs training data:** see [docs/GENERALIZATION.md](docs/GENERALIZATION.md). Debug script: `python scripts/debug_predict.py path/to/leaf.jpg`.
+
 ## Production (PM2 on Linux)
 
 1. Create the venv and install dependencies on the server (paths below assume repo root `/root/backend/Agricai/Agricai-Python`).

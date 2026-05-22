@@ -330,12 +330,15 @@ def ensure_train_val_dirs(root: Path) -> tuple[Path, Path]:
 # Preprocessing (matches Agricai-Python inference)
 # -----------------------------------------------------------------------------
 
+# Stronger augmentation — closer to phone photos (angle, light, blur, framing).
 augment = keras.Sequential(
     [
         layers.RandomFlip("horizontal"),
-        layers.RandomRotation(0.08),
-        layers.RandomZoom(0.1),
-        layers.RandomContrast(0.1),
+        layers.RandomRotation(0.15),
+        layers.RandomZoom(0.15),
+        layers.RandomTranslation(0.08, 0.08),
+        layers.RandomContrast(0.15),
+        layers.RandomBrightness(0.12),
     ],
     name="augment",
 )
@@ -575,7 +578,9 @@ def save_artifacts(model: keras.Model, metrics: dict) -> None:
             "MODEL_PATH": "path/to/crop_classifier.onnx",
             "MODEL_VERSION": "1.0.0",
             "INPUT_SIZE": IMG_SIZE,
-            "CONFIDENCE_THRESHOLD": 0.35,
+            "CONFIDENCE_THRESHOLD": 0.58,
+            "CONFIDENCE_MARGIN": 0.10,
+            "TTA_ENABLED": True,
             "onnx_output": f"logits shape [1, {NUM_CLASSES}]",
         },
     }
