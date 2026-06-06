@@ -1,5 +1,7 @@
+import json
 from contextlib import asynccontextmanager
 from io import BytesIO
+from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,9 +10,28 @@ from PIL import UnidentifiedImageError
 
 from app.config import get_settings
 from app.inference.engine import InferenceEngine, get_engine, run_detect_with_engine
-from app.schemas import DetectResponse, HealthResponse, ModelInfoResponse
+from app.schemas import (
+    ClassDetailResponse,
+    ClassesListResponse,
+    ClassSummary,
+    DetectResponse,
+    HealthResponse,
+    ModelInfoResponse,
+)
 
 _engine: InferenceEngine | None = None
+
+
+def _load_val_accuracy_pct() -> float | None:
+    summary_path = Path(__file__).resolve().parent.parent / "model" / "training_summary.json"
+    if not summary_path.is_file():
+        return None
+    try:
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+        acc = data.get("metrics", {}).get("val_accuracy")
+        return round(float(acc) * 100, 1) if acc is not None else None
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
 
 
 @asynccontextmanager
@@ -64,6 +85,41 @@ def create_app() -> FastAPI:
             tta_enabled=settings.tta_enabled,
             confidence_threshold=settings.confidence_threshold,
             confidence_margin=settings.confidence_margin,
+            val_accuracy_pct=_load_val_accuracy_pct(),
+            target_accuracy_pct=98.0,
+        )
+
+    @app.get("/v1/classes", response_model=ClassesListResponse)
+    def list_classes() -> ClassesListResponse:
+        if _engine is None:
+            raise HTTPException(status_code=503, detail="Inference engine not ready.")
+        classes = [
+            ClassSummary(
+                class_id=entry.class_id,
+                type=entry.type,
+                diseaseName=entry.diseaseName,
+                diseaseNameRw=entry.diseaseNameRw,
+            )
+            for cid in _engine.kb.class_ids
+            for entry in [_engine.kb.try_get(cid)]
+            if entry is not None
+        ]
+        return ClassesListResponse(
+            model_version=settings.model_version,
+            count=len(classes),
+            classes=classes,
+        )
+
+    @app.get("/v1/classes/{class_id}", response_model=ClassDetailResponse)
+    def class_detail(class_id: str) -> ClassDetailResponse:
+        if _engine is None:
+            raise HTTPException(status_code=503, detail="Inference engine not ready.")
+        entry = _engine.kb.try_get(class_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Class not found.")
+        return ClassDetailResponse(
+            class_id=class_id,
+            result=_engine.kb.to_detection(entry, confidence_pct=0.0),
         )
 
     @app.post("/v1/detect", response_model=DetectResponse)

@@ -64,3 +64,27 @@ class ModelInfoResponse(BaseModel):
     tta_enabled: bool = True
     confidence_threshold: float = 0.58
     confidence_margin: float = 0.10
+    val_accuracy_pct: float | None = None
+    target_accuracy_pct: float = 98.0
+
+
+class ClassSummary(BaseModel):
+    class_id: str
+    type: DiseaseType
+    diseaseName: str
+    diseaseNameRw: str
+
+
+class ClassesListResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_version: str
+    count: int
+    classes: list[ClassSummary]
+
+
+class ClassDetailResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    class_id: str
+    result: DetectionResult
