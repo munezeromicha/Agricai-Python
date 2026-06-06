@@ -79,7 +79,20 @@ Windows (no PM2): `.\scripts\start-production.ps1`
 
 Put **Caddy** (or another reverse proxy) in front of port `8000` for `ml.agric-ai.com`.
 
-## ONNX model
+## Tomato-only testing (Keras)
+
+To test your trained `tomato_model.keras` without the multi-crop ONNX model:
+
+```bash
+python scripts/setup_tomato_model.py
+uvicorn app.main:app --reload --port 8000
+```
+
+This sets `INFERENCE_MODE=keras`, `MODEL_PATH=model/tomato_model.keras`, and `CLASSES_PATH=data/classes_tomato.json`. The previous multi-crop weights are archived under `model/archive/`.
+
+See [docs/TRAIN_TOMATO.md](docs/TRAIN_TOMATO.md).
+
+## ONNX model (multi-crop production)
 
 1. Export a classifier that outputs **logits** with shape `[1, N]` where **N equals** the number of **trainable** entries in `data/classes.json` (all rows except `unknown`). Class index `i` must match the `i`th trainable `class_id` in file order.
 2. Set `INFERENCE_MODE=onnx`, `MODEL_PATH=...`, and `MODEL_VERSION=...` in `.env`.

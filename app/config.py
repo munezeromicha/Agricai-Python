@@ -15,10 +15,16 @@ class Settings(BaseSettings):
     # CORS: comma-separated origins, e.g. http://localhost:5173,http://127.0.0.1:5173
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
-    # stub | onnx — stub needs no model file; onnx loads MODEL_PATH
+    # stub | onnx | keras
     inference_mode: str = "stub"
     model_path: str | None = None
     model_version: str = "0.0.0-stub"
+
+    # Optional override for knowledge base (tomato-only testing: data/classes_tomato.json)
+    classes_path: str | None = None
+
+    # keras only: builtin_rescale = model has Rescaling(1/255); imagenet = manual ImageNet norm
+    keras_preprocess: str = "builtin_rescale"
 
     # ImageNet-style preprocessing (change if your training recipe differs)
     input_size: int = 224
@@ -40,7 +46,12 @@ class Settings(BaseSettings):
         return Path(__file__).resolve().parent.parent
 
     @property
-    def classes_path(self) -> Path:
+    def resolved_classes_path(self) -> Path:
+        if self.classes_path:
+            p = Path(self.classes_path)
+            if not p.is_absolute():
+                p = self.project_root / p
+            return p
         return self.project_root / "data" / "classes.json"
 
     def resolved_model_path(self) -> Path | None:

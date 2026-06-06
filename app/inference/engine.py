@@ -237,7 +237,7 @@ class OnnxEngine(InferenceEngine):
 
 def get_engine(settings: Settings | None = None) -> InferenceEngine:
     settings = settings or get_settings()
-    kb = KnowledgeBase(settings.classes_path)
+    kb = KnowledgeBase(settings.resolved_classes_path)
 
     mode = settings.inference_mode.lower().strip()
     if mode == "onnx":
@@ -248,7 +248,106 @@ def get_engine(settings: Settings | None = None) -> InferenceEngine:
             raise FileNotFoundError(f"MODEL_PATH not found: {settings.model_path}")
         return OnnxEngine(kb, settings, path)
 
+    if mode == "keras":
+        if not settings.model_path:
+            raise RuntimeError("INFERENCE_MODE=keras requires MODEL_PATH to a .keras file.")
+        path = settings.resolved_model_path()
+        if path is None or not path.is_file():
+            raise FileNotFoundError(f"MODEL_PATH not found: {settings.model_path}")
+        return KerasEngine(kb, settings, path)
+
     return StubEngine(kb, settings)
+
+
+def _preprocess_for_keras(image: Image.Image, settings: Settings) -> np.ndarray:
+    """Build batch input for .keras models."""
+    image = image.convert("RGB")
+    image = image.resize((settings.input_size, settings.input_size), Image.Resampling.BILINEAR)
+    arr = np.asarray(image, dtype=np.float32)
+    mode = settings.keras_preprocess.lower().strip()
+    if mode == "imagenet":
+        arr = arr / 255.0
+        arr = (arr - np.array([0.485, 0.456, 0.406], dtype=np.float32)) / np.array(
+            [0.229, 0.224, 0.225], dtype=np.float32
+        )
+    # builtin_rescale: pixels 0–255; model's Rescaling(1/255) layer handles normalization
+    return np.expand_dims(arr, axis=0)
+
+
+class KerasEngine(InferenceEngine):
+    """TensorFlow/Keras .keras classifier (tomato-only testing)."""
+
+    def __init__(self, kb: KnowledgeBase, settings: Settings, model_path: Path) -> None:
+        import tensorflow as tf
+
+        self.kb = kb
+        self._settings = settings
+        self._model = tf.keras.models.load_model(model_path, compile=False)
+        last = self._model.layers[-1]
+        activation = getattr(last, "activation", None)
+        act_name = getattr(activation, "__name__", str(activation))
+        self._outputs_softmax = "softmax" in act_name.lower()
+        self._trainable_ids = kb.trainable_class_ids
+        self._expected_classes = kb.num_trainable_classes
+        self._disease_names = {cid: kb.get(cid).diseaseName for cid in self._trainable_ids}
+
+    def _run_probs(self, batch: np.ndarray) -> np.ndarray:
+        raw = self._model.predict(batch, verbose=0)
+        out = np.asarray(raw, dtype=np.float32).reshape(-1)
+        if self._outputs_softmax:
+            return out
+        return logits_to_probs(out)
+
+    def classify(self, image: Image.Image) -> ClassifyDetails:
+        if self._settings.plant_guard_enabled and not looks_like_crop_leaf_photo(image):
+            return ClassifyDetails(
+                probs=np.array([]),
+                top_class_id=None,
+                uncertain=True,
+                rejection_reason="plant_guard",
+                top_confidence=0.0,
+                margin=0.0,
+                alternatives=[],
+                plant_guard_blocked=True,
+            )
+
+        if self._settings.tta_enabled:
+            flipped = image.transpose(Image.FLIP_LEFT_RIGHT)
+            p1 = self._run_probs(_preprocess_for_keras(image, self._settings))
+            p2 = self._run_probs(_preprocess_for_keras(flipped, self._settings))
+            probs = (p1 + p2) / 2.0
+        else:
+            probs = self._run_probs(_preprocess_for_keras(image, self._settings))
+
+        alts = build_alternatives(probs, self._trainable_ids, self._disease_names)
+
+        if probs.shape[0] != self._expected_classes:
+            return ClassifyDetails(
+                probs=probs,
+                top_class_id=None,
+                uncertain=True,
+                rejection_reason="class_count_mismatch",
+                top_confidence=float(np.max(probs)) if probs.size else 0.0,
+                margin=0.0,
+                alternatives=alts,
+            )
+
+        best_i = int(np.argmax(probs))
+        uncertain, top_p, margin, reason = prediction_is_uncertain(
+            probs,
+            min_confidence=self._settings.confidence_threshold,
+            min_margin=self._settings.confidence_margin,
+        )
+        class_id = None if uncertain else self._trainable_ids[best_i]
+        return ClassifyDetails(
+            probs=probs,
+            top_class_id=class_id,
+            uncertain=uncertain,
+            rejection_reason=reason,
+            top_confidence=top_p,
+            margin=margin,
+            alternatives=alts,
+        )
 
 
 def run_detect_with_engine(
