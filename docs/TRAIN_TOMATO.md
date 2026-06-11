@@ -1,87 +1,119 @@
 # Train tomato leaf disease model
 
 Scripts:
-- **Kaggle notebook (recommended):** [`training/kaggle_train_tomato.py`](../training/kaggle_train_tomato.py) — paste into one cell
-- **Local / generic:** [`training/train_tomato.py`](../training/train_tomato.py)
+- **Disease model (10 or 11 classes):** [`training/train_tomato.py`](../training/train_tomato.py)
+- **Stage 1 gate (tomato vs not):** [`training/train_tomato_gate.py`](../training/train_tomato_gate.py)
+- **Kaggle notebook:** [`training/kaggle_train_tomato.py`](../training/kaggle_train_tomato.py)
+
+## How it works (plain English)
+
+1. **Stage 1 — Tomato leaf gate** (`tomato_leaf_gate.keras`)  
+   A small binary model answers: *“Is this a tomato leaf?”*  
+   If the answer is no (face, maize leaf, document, etc.), the API returns **“Not a tomato leaf”** and never runs the disease model.
+
+2. **Stage 2 — Disease classifier** (`tomato_model.keras`)  
+   Only runs when Stage 1 passes. Picks one of 10 tomato diseases/healthy.
+
+3. **Optional 11th class — `Not_Tomato`**  
+   If you add a `Not_Tomato/` folder to training data, the disease model can also learn to reject non-tomato images itself (backup to the gate).
 
 ## 1. Get the dataset
 
-Download or use Kaggle dataset **tomatoes-leaf-disease-detection** (or PlantVillage tomato classes).
+Use Kaggle **tomatoes-leaf-disease-detection** (PlantVillage-style folders).
 
-Folder layout:
+**Minimum layout (10 tomato classes):**
 
 ```
 tomatoes-leaf-disease-detection/
   train/
     Tomato___Early_blight/
     Tomato___Late_blight/
-    Tomato___Tomato_mosaic_virus/
-    Tomato___Tomato_Yellow_Leaf_Curl_Virus/
     Tomato___healthy/
+    ...
   validation/
     (same folder names)
 ```
 
-## 2. Kaggle (recommended — free GPU)
+**Recommended layout (gate + 11th reject class):**
 
-1. Create a new notebook on [kaggle.com](https://www.kaggle.com)
-2. **Settings → Accelerator → GPU T4**
-3. **Add Data** → your tomato dataset
-4. Upload `train_tomato.py` or paste its contents into a cell
-5. Run:
-
-```python
-import os
-os.environ["AGRICAI_WORK_DIR"] = "/kaggle/working/tomato_model"
-%run train_tomato.py
+```
+tomatoes-leaf-disease-detection/
+  train/
+    Tomato___Early_blight/
+    ...
+    Tomato___healthy/
+    Not_Tomato/          ← 500+ non-tomato images
+      maize_leaves/
+      faces/
+      documents/
+      random_photos/
+  validation/
+    Not_Tomato/
+    (tomato folders)
 ```
 
-6. Download from **Output**:
-   - `tomato_classifier.onnx`
-   - `tomato_class_names.json`
-   - `tomato_training_summary.json`
+`Not_Tomato/` should include: other crop leaves, indoor scenes, faces, screenshots, fruits, random objects — anything users might upload by mistake.
 
-## 3. Local training
+## 2. Train (Kaggle GPU or local)
 
 ```bash
 cd Agricai-Python
-python -m venv .venv
-.venv\Scripts\activate          # Linux/macOS: source .venv/bin/activate
 pip install tensorflow scikit-learn matplotlib tf2onnx onnx onnxruntime
 
 set TOMATO_DATASET_PATH=C:\path\to\tomatoes-leaf-disease-detection
-set AGRICAI_WORK_DIR=.\model\tomato
+set AGRICAI_WORK_DIR=.\model
 python training/train_tomato.py
 ```
 
-## 4. Use the tomato model in AGRIC AI (testing — tomato only)
+If `Not_Tomato/` exists, the script also trains the Stage 1 gate automatically.
 
-After training, place `tomato_model.keras` in `model/` (or `docs/`) and run:
+**Gate only** (if you already have a disease model):
+
+```bash
+python training/train_tomato_gate.py
+```
+
+## 3. Deploy in AGRIC AI
+
+Copy outputs to `model/`:
+
+- `tomato_classifier.keras` → `model/tomato_model.keras`
+- `tomato_class_names.json` → `model/tomato_class_names.json`
+- `tomato_leaf_gate.keras` → `model/tomato_leaf_gate.keras`
+
+Then:
 
 ```bash
 python scripts/setup_tomato_model.py
+uvicorn app.main:app --reload --port 8000
 ```
 
-This will:
-- Copy `docs/tomato_model.keras` → `model/tomato_model.keras`
-- Generate `data/classes_tomato.json` (10 tomato classes + unknown)
-- Set `.env` to `INFERENCE_MODE=keras` (old multi-crop ONNX moved to `model/archive/`)
+Important `.env` settings:
 
 ```env
 INFERENCE_MODE=keras
 MODEL_PATH=model/tomato_model.keras
 CLASSES_PATH=data/classes_tomato.json
-MODEL_VERSION=tomato-cnn-1.0.0
-KERAS_PREPROCESS=builtin_rescale
+KERAS_PREPROCESS=imagenet
+TOMATO_GATE_ENABLED=true
+TOMATO_GATE_PATH=model/tomato_leaf_gate.keras
+TOMATO_GATE_THRESHOLD=0.55
+CONFIDENCE_THRESHOLD=0.58
 ```
 
-Restart: `uvicorn app.main:app --reload --port 8000`
+## 4. Tips for high accuracy
 
-To restore the full multi-crop ONNX model later, set `INFERENCE_MODE=onnx`, `MODEL_PATH=model/archive/crop_classifier.onnx`, and `CLASSES_PATH=data/classes_multicrop.json.bak` (rename back to `classes.json`).
+- **100+ images per tomato disease class**; **500+ images in `Not_Tomato/`**
+- Add **real phone photos** from the field, not only clean dataset images
+- After training, tune thresholds: `python scripts/tune_thresholds.py field_test/`
+- If real tomato leaves get rejected, lower `TOMATO_GATE_THRESHOLD` (e.g. 0.50)
+- If wrong images still pass, raise it (e.g. 0.65) or add more `Not_Tomato` examples
 
-## 5. Tips for 98%+ accuracy
+## 5. What users see when an image is rejected
 
-- At least **100+ images per class** (more for rare diseases)
-- Include **phone photos** from Rwanda fields, not only dataset images
-- Balance classes (script uses `class_weight` automatically)
-- After training, run `python scripts/tune_thresholds.py` on `field_test/` images
+| Reason | Meaning |
+|--------|---------|
+| `not_tomato` | Gate or model says this is not a tomato leaf |
+| `plant_guard` | Image does not look like any crop leaf (heuristic) |
+| `low_confidence` | Model unsure — ask for a clearer photo |
+| `low_margin` | Two diseases look equally likely |

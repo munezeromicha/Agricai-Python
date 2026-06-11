@@ -7,8 +7,16 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# Trained model weights (GitHub 100 MB limit - keep locally, not in git)
+# Trained model weights (GitHub 100 MB limit — deploy separately, not in git)
 *.keras
+*.onnx
+*.zip
+model/agricai_models.zip
+model/agricai_models_extracted/
+model/gate_split_data/
+model/gate_split/
+model/archive/
 docs/tomato_model.keras
-model/tomato_model.keras
-model/archive/*.keras
+
+# Optional large training artifacts
+model/confusion_matrix.png

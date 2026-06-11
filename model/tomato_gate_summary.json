@@ -1,0 +1,19 @@
+{
+  "model": "tomato_leaf_gate",
+  "class_names": [
+    "not_tomato",
+    "tomato_leaf"
+  ],
+  "tomato_leaf_index": 1,
+  "img_size": 224,
+  "metrics": {
+    "val_loss": 0.0003999475156888366,
+    "val_accuracy": 1.0
+  },
+  "deploy": {
+    "TOMATO_GATE_ENABLED": true,
+    "TOMATO_GATE_PATH": "model/tomato_leaf_gate.keras",
+    "TOMATO_GATE_THRESHOLD": 0.55,
+    "KERAS_PREPROCESS": "imagenet"
+  }
+}

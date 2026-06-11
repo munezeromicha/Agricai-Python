@@ -141,6 +141,20 @@
       "careRw": "Kurikirana nyuma y'imvura; komeza umuyaga; andika ibimenyetso n'itariki."
     },
     {
+      "class_id": "Not_Tomato",
+      "type": "unknown",
+      "diseaseName": "Not a tomato leaf",
+      "diseaseNameRw": "Si ikibabi cy'inyanya",
+      "explanation": "This image does not appear to be a tomato leaf. The disease model is trained for tomato leaves only.",
+      "explanationRw": "Ifoto ntisa neza n'ikibabi cy'inyanya. Moderi y'indwara yigishijwe gusa ku mababi y'inyanya.",
+      "treatment": "Use a close-up photo of one tomato leaf and try again.",
+      "treatmentRw": "Koresha ifoto yegereye y'ikibabi kimwe cy'inyanya hanyuma ugerageze.",
+      "prevention": "Only tomato leaf photos can be diagnosed with this model.",
+      "preventionRw": "Gusa amafoto y'amababi y'inyanya ashobora gusuzumwa n'iyi moderi.",
+      "care": "If you grow other crops, check which crops AGRIC AI supports.",
+      "careRw": "Niba uhinja ibindi bihingwa, reba ibihingwa AGRIC AI ishyigikira."
+    },
+    {
       "class_id": "unknown",
       "type": "unknown",
       "diseaseName": "Uncertain diagnosis",

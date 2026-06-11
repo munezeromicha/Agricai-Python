@@ -4,7 +4,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 DiseaseType = Literal["healthy", "disease", "pest", "unknown"]
 RejectionReason = Literal[
-    "plant_guard", "low_confidence", "low_margin", "class_count_mismatch"
+    "plant_guard",
+    "not_tomato",
+    "low_confidence",
+    "low_margin",
+    "class_count_mismatch",
 ]
 
 

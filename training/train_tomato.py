@@ -93,6 +93,14 @@ SKIP_DIR_NAMES = frozenset({
     "__macosx", ".ipynb_checkpoints",
 })
 
+# 11th class — non-tomato images (faces, other crops, documents, etc.)
+NOT_TOMATO_CLASS_ID = "Not_Tomato"
+NOT_TOMATO_ALIASES = frozenset({
+    "not_tomato", "not tomato", "not-tomato", "non_tomato", "non tomato",
+    "negative", "negatives", "background", "other_crop", "other crop",
+    "not_a_tomato", "not a tomato",
+})
+
 # ImageNet normalization — must match Agricai-Python inference (engine.py)
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -151,9 +159,12 @@ def _import_tf():
 
 
 def normalize_class_name(raw: str) -> str:
-    """Convert folder name to AGRIC AI Tomato___* class_id."""
+    """Convert folder name to AGRIC AI Tomato___* class_id or Not_Tomato."""
     key = raw.strip().lower().replace("-", " ").replace("__", "_")
     key = re.sub(r"\s+", " ", key)
+    key_us = key.replace(" ", "_")
+    if key in NOT_TOMATO_ALIASES or key_us in NOT_TOMATO_ALIASES or raw.strip() == NOT_TOMATO_CLASS_ID:
+        return NOT_TOMATO_CLASS_ID
     if key in CLASS_NAME_ALIASES:
         return CLASS_NAME_ALIASES[key]
     # Already looks like Tomato___Something
@@ -182,8 +193,20 @@ def count_images(directory: Path) -> int:
 
 def _set_classes(names: list[str]) -> None:
     global CLASS_NAMES, NUM_CLASSES
-    CLASS_NAMES = names
-    NUM_CLASSES = len(names)
+    CLASS_NAMES = _order_class_names(names)
+    NUM_CLASSES = len(CLASS_NAMES)
+
+
+def _order_class_names(names: list[str]) -> list[str]:
+    """Tomato disease classes first (sorted), Not_Tomato always last."""
+    tomato = sorted(cid for cid in names if cid != NOT_TOMATO_CLASS_ID)
+    if NOT_TOMATO_CLASS_ID in names:
+        return tomato + [NOT_TOMATO_CLASS_ID]
+    return tomato
+
+
+def has_not_tomato_class(train_dir: Path, val_dir: Path) -> bool:
+    return (train_dir / NOT_TOMATO_CLASS_ID).is_dir() or (val_dir / NOT_TOMATO_CLASS_ID).is_dir()
 
 
 def find_dataset_root() -> Path:
@@ -243,6 +266,48 @@ def discover_class_dirs(split_dir: Path) -> dict[str, Path]:
     return found
 
 
+def flatten_nested_class_folder(class_dir: Path) -> int:
+    """
+    TensorFlow only reads images directly inside a class folder.
+    If Not_Tomato/bean_leaves/*.jpg etc. exist, link them into Not_Tomato/ root.
+    """
+    if not class_dir.is_dir():
+        return 0
+    direct = [
+        f for f in class_dir.iterdir()
+        if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
+    ]
+    if direct:
+        return 0
+    nested = [
+        f for f in class_dir.rglob("*")
+        if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS and f.parent != class_dir
+    ]
+    if not nested:
+        return 0
+    linked = 0
+    for img in nested:
+        sub = img.parent.name
+        dest = class_dir / f"{sub}_{img.stem}{img.suffix}"
+        if dest.exists():
+            dest = class_dir / f"{sub}_{img.stem}_{hash(img) & 0xFFFF}{img.suffix}"
+        try:
+            os.symlink(img.resolve(), dest)
+        except OSError:
+            shutil.copy2(img, dest)
+        linked += 1
+    print(f"[data] Flattened {linked} nested images in {class_dir.name}/")
+    return linked
+
+
+def prepare_dataset_folders(train_dir: Path, val_dir: Path) -> None:
+    """Ensure nested Not_Tomato subfolders (bean_leaves, faces, …) are visible to TensorFlow."""
+    for split in (train_dir, val_dir):
+        nt = split / NOT_TOMATO_CLASS_ID
+        if nt.is_dir():
+            flatten_nested_class_folder(nt)
+
+
 def copy_split(class_dirs: dict[str, Path], dest_train: Path, dest_val: Path) -> None:
     if dest_train.exists():
         shutil.rmtree(dest_train)
@@ -285,7 +350,9 @@ def ensure_train_val(root: Path) -> tuple[Path, Path]:
         if not common:
             raise RuntimeError("No matching classes between train/ and validation/")
         _set_classes(common)
-        print(f"[data] {NUM_CLASSES} tomato classes:")
+        tomato_n = sum(1 for c in CLASS_NAMES if c != NOT_TOMATO_CLASS_ID)
+        extra = f" + {NOT_TOMATO_CLASS_ID}" if NOT_TOMATO_CLASS_ID in CLASS_NAMES else ""
+        print(f"[data] {tomato_n} tomato classes{extra}:")
         for c in CLASS_NAMES:
             print(f"       - {c}")
         return train_p, val_p
@@ -495,7 +562,8 @@ def save_artifacts(model, metrics: dict) -> None:
             "class_names": CLASS_NAMES,
             "crop": "tomato",
             "num_classes": NUM_CLASSES,
-            "note": "Tomato-only model. Index i → CLASS_NAMES[i].",
+            "has_not_tomato_class": NOT_TOMATO_CLASS_ID in CLASS_NAMES,
+            "note": "Index i → CLASS_NAMES[i]. Not_Tomato (if present) is always last.",
         }, f, indent=2)
 
     summary = {
@@ -530,6 +598,7 @@ def main() -> None:
 
     root = find_dataset_root()
     train_dir, val_dir = ensure_train_val(root)
+    prepare_dataset_folders(train_dir, val_dir)
     train_ds, val_ds = build_datasets(tf, keras, layers, train_dir, val_dir)
     cw = class_weights(train_dir)
 
@@ -540,6 +609,18 @@ def main() -> None:
     metrics = evaluate(model, val_ds)
     save_artifacts(model, metrics)
 
+    if has_not_tomato_class(train_dir, val_dir):
+        print("\n[data] Not_Tomato folder found — training Stage 1 binary gate...")
+        from train_tomato_gate import train_tomato_gate
+
+        gate_dir = WORK_DIR.parent if WORK_DIR.name != "model" else WORK_DIR
+        train_tomato_gate(train_dir, val_dir, work_dir=gate_dir)
+    else:
+        print(
+            "\n[hint] Add train/Not_Tomato/ with non-tomato images (500+) to train "
+            "the Stage 1 gate and enable the 11th reject class."
+        )
+
     acc = metrics["val_accuracy"]
     print("\n" + "=" * 72)
     print(f"TOMATO MODEL TRAINING COMPLETE — val accuracy: {acc * 100:.2f}%")
@@ -548,6 +629,9 @@ def main() -> None:
     print("  - tomato_classifier.onnx")
     print("  - tomato_class_names.json")
     print("  - tomato_training_summary.json")
+    if has_not_tomato_class(train_dir, val_dir):
+        print("  - tomato_leaf_gate.keras (Stage 1 binary gate)")
+        print("  - tomato_gate_summary.json")
     if acc >= 0.98:
         print("✓ Reached 98% validation accuracy target!")
     else:

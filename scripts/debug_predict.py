@@ -22,7 +22,8 @@ from PIL import Image
 from app.config import Settings, get_settings
 from app.inference.classify import prediction_is_uncertain
 from app.inference.engine import get_engine
-from app.inference.plant_guard import looks_like_crop_leaf_photo
+from app.inference.leaf_crop import extract_primary_leaf
+from app.inference.plant_guard import leaf_plausibility_score, looks_like_crop_leaf_photo
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
 
@@ -41,11 +42,22 @@ def analyze_one(path: Path, settings: Settings) -> None:
     image = Image.open(path)
     image.load()
 
-    guard_ok = looks_like_crop_leaf_photo(image) if settings.plant_guard_enabled else True
+    work = image
+    cropped = False
+    if settings.leaf_auto_crop_enabled:
+        work, cropped = extract_primary_leaf(image)
+    leaf_score = leaf_plausibility_score(work)
+    guard_ok = (
+        looks_like_crop_leaf_photo(work, min_score=settings.plant_guard_min_score)
+        if settings.plant_guard_enabled
+        else True
+    )
     details = engine.classify(image)
 
     print(f"\n{'=' * 72}")
     print(path)
+    print(f"  auto_crop:   {'yes' if cropped else 'no'}")
+    print(f"  leaf_score:  {leaf_score:.2f}")
     print(f"  plant_guard: {'pass' if guard_ok else 'BLOCKED'}")
     print(f"  tta_enabled: {settings.tta_enabled}")
     print(f"  threshold:   {settings.confidence_threshold:.0%}")

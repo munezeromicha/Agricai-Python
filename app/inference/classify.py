@@ -10,7 +10,13 @@ from PIL import Image
 
 from app.config import Settings
 
-RejectionReason = Literal["plant_guard", "low_confidence", "low_margin", "class_count_mismatch"]
+RejectionReason = Literal[
+    "plant_guard",
+    "not_tomato",
+    "low_confidence",
+    "low_margin",
+    "class_count_mismatch",
+]
 
 
 @dataclass(frozen=True)
@@ -110,6 +116,20 @@ def tta_image_variants(image: Image.Image) -> list[Image.Image]:
         if w > 2 * dx and h > 2 * dy:
             variants.append(rgb.crop((dx, dy, w - dx, h - dy)))
     return variants
+
+
+def is_overconfident_nonleaf(
+    probs: np.ndarray,
+    leaf_score: float,
+    *,
+    min_leaf_score: float,
+    confidence_trigger: float,
+) -> bool:
+    """Catch OOD photos where softmax is wrongly very confident (people, landscapes, etc.)."""
+    if probs.size == 0:
+        return False
+    top_p = float(np.max(probs))
+    return top_p >= confidence_trigger and leaf_score < min_leaf_score
 
 
 def prediction_is_uncertain(

@@ -11,6 +11,12 @@ _MESSAGES: dict[RejectionReason | str, tuple[str, str, str, str]] = {
         "This does not look like a crop leaf. Upload a clear, close-up photo of one leaf in daylight — not a screenshot or document.",
         "Ifoto ntiyirasa neza n'ikibabi. Shyiraho ifoto yegereye y'ikibabi kimwe mu mucyo mwiza.",
     ),
+    "not_tomato": (
+        "Not a tomato leaf",
+        "Si ikibabi cy'inyanya",
+        "This image does not look like a tomato leaf. Our model is trained for tomato leaves only — use a close-up photo of one tomato leaf, or choose the correct crop if we support it.",
+        "Ifoto ntisa neza n'ikibabi cy'inyanya. Moderi yacu yigishijwe gusa ku mababi y'inyanya — shyiraho ifoto yegereye y'ikibabi kimwe cy'inyanya.",
+    ),
     "low_confidence": (
         "Uncertain — try a clearer photo",
         "Ntibizwi — ongera ugerageze",

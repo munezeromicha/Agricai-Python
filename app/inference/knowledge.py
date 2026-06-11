@@ -50,8 +50,13 @@ class KnowledgeBase:
 
     @property
     def trainable_class_ids(self) -> list[str]:
-        """Classes the vision model may predict (excludes knowledge-only ``unknown``)."""
-        return [cid for cid in self._order if cid != "unknown" and self._by_id[cid].type != "unknown"]
+        """Model output classes in knowledge order (excludes knowledge-only ``unknown``)."""
+        return [cid for cid in self._order if cid != "unknown"]
+
+    @property
+    def disease_class_ids(self) -> list[str]:
+        """Tomato disease classes only — excludes Not_Tomato reject class."""
+        return [cid for cid in self.trainable_class_ids if cid != "Not_Tomato"]
 
     @property
     def num_classes(self) -> int:

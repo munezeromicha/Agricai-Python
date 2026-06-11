@@ -9,9 +9,11 @@
     "Tomato___Target_Spot",
     "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
     "Tomato___Tomato_mosaic_virus",
-    "Tomato___healthy"
+    "Tomato___healthy",
+    "Not_Tomato"
   ],
   "crop": "tomato",
-  "num_classes": 10,
-  "note": "Alphabetical order from tf.keras image_dataset_from_directory (PlantVillage-style folders). Re-run scripts/setup_tomato_model.py if your Kaggle folders used different names."
+  "num_classes": 11,
+  "has_not_tomato_class": true,
+  "note": "Index i \u2192 CLASS_NAMES[i]. Not_Tomato (if present) is always last."
 }

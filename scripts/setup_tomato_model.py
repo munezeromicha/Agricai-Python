@@ -22,6 +22,27 @@ ENV_PATH = ROOT / ".env"
 sys.path.insert(0, str(ROOT / "scripts"))
 from sync_classes_json import entry_for  # noqa: E402
 
+NOT_TOMATO_ROW = {
+    "class_id": "Not_Tomato",
+    "type": "unknown",
+    "diseaseName": "Not a tomato leaf",
+    "diseaseNameRw": "Si ikibabi cy'inyanya",
+    "explanation": (
+        "This image does not appear to be a tomato leaf. "
+        "The disease model is trained for tomato leaves only."
+    ),
+    "explanationRw": (
+        "Ifoto ntisa neza n'ikibabi cy'inyanya. "
+        "Moderi y'indwara yigishijwe gusa ku mababi y'inyanya."
+    ),
+    "treatment": "Use a close-up photo of one tomato leaf and try again.",
+    "treatmentRw": "Koresha ifoto yegereye y'ikibabi kimwe cy'inyanya hanyuma ugerageze.",
+    "prevention": "Only tomato leaf photos can be diagnosed with this model.",
+    "preventionRw": "Gusa amafoto y'amababi y'inyanya ashobora gusuzumwa n'iyi moderi.",
+    "care": "If you grow other crops, check which crops AGRIC AI supports.",
+    "careRw": "Niba uhinja ibindi bihingwa, reba ibihingwa AGRIC AI ishyigikira.",
+}
+
 UNKNOWN_ROW = {
     "class_id": "unknown",
     "type": "unknown",
@@ -61,13 +82,17 @@ def verify_keras(num_expected: int) -> None:
 
 
 def write_classes_json(names: list[str]) -> None:
-    classes = [entry_for(n) for n in names]
+    disease_names = [n for n in names if n != "Not_Tomato"]
+    classes = [entry_for(n) for n in disease_names]
+    if "Not_Tomato" in names:
+        classes.append(NOT_TOMATO_ROW)
     classes.append(UNKNOWN_ROW)
     CLASSES_OUT.write_text(
         json.dumps({"classes": classes}, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    print(f"[ok] Wrote {CLASSES_OUT} ({len(names)} tomato classes + unknown)")
+    extra = " + Not_Tomato" if "Not_Tomato" in names else ""
+    print(f"[ok] Wrote {CLASSES_OUT} ({len(disease_names)} tomato classes{extra} + unknown)")
 
 
 def update_env() -> None:
@@ -79,8 +104,18 @@ def update_env() -> None:
         "INFERENCE_MODE": "keras",
         "MODEL_PATH": "model/tomato_model.keras",
         "CLASSES_PATH": "data/classes_tomato.json",
-        "MODEL_VERSION": "tomato-cnn-1.0.0",
-        "KERAS_PREPROCESS": "builtin_rescale",
+        "MODEL_VERSION": "tomato-cnn-2.0.0",
+        "KERAS_PREPROCESS": "imagenet",
+        "TOMATO_GATE_ENABLED": "true",
+        "TOMATO_GATE_PATH": "model/tomato_leaf_gate.keras",
+        "TOMATO_GATE_THRESHOLD": "0.60",
+        "CONFIDENCE_THRESHOLD": "0.65",
+        "CONFIDENCE_MARGIN": "0.12",
+        "NOT_TOMATO_COMPETE_THRESHOLD": "0.28",
+        "NOT_TOMATO_COMPETE_MARGIN": "0.18",
+        "PLANT_GUARD_MIN_SCORE": "0.48",
+        "OOD_CONFIDENCE_TRIGGER": "0.82",
+        "OOD_LEAF_SCORE_MAX": "0.52",
     }
     seen = set()
     new_lines = []

@@ -38,8 +38,27 @@ class Settings(BaseSettings):
     # Average logits over flipped/cropped views — improves phone-photo generalization.
     tta_enabled: bool = True
 
-    # Run color/contrast checks before ONNX — blocks terminals, houses, documents, etc.
+    # Run leaf-plausibility checks before/after inference — blocks people, landscapes, etc.
     plant_guard_enabled: bool = True
+
+    # Minimum 0–1 leaf score required before running the classifier (0.42 balances field photos).
+    plant_guard_min_score: float = 0.42
+
+    # After inference: reject very confident predictions when the image still looks non-leaf.
+    ood_leaf_score_max: float = 0.50
+    ood_confidence_trigger: float = 0.85
+
+    # Crop to the largest leaf blob before guard + classifier (multi-leaf / busy backgrounds)
+    leaf_auto_crop_enabled: bool = True
+
+    # Stage 1 binary gate — tomato leaf vs everything else (model/tomato_leaf_gate.keras)
+    tomato_gate_enabled: bool = True
+    tomato_gate_path: str | None = "model/tomato_leaf_gate.keras"
+    tomato_gate_threshold: float = 0.60
+
+    # 11-class model: reject when Not_Tomato probability is competitive with top disease
+    not_tomato_compete_threshold: float = 0.28
+    not_tomato_compete_margin: float = 0.18
 
     @property
     def project_root(self) -> Path:
@@ -58,6 +77,14 @@ class Settings(BaseSettings):
         if not self.model_path:
             return None
         p = Path(self.model_path)
+        if not p.is_absolute():
+            p = self.project_root / p
+        return p
+
+    def resolved_gate_path(self) -> Path | None:
+        if not self.tomato_gate_path:
+            return None
+        p = Path(self.tomato_gate_path)
         if not p.is_absolute():
             p = self.project_root / p
         return p

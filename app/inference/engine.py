@@ -15,14 +15,21 @@ from app.inference.classify import (
     average_tta_logits,
     build_alternatives,
     infer_onnx_layout,
+    is_overconfident_nonleaf,
     logits_to_probs,
     normalize_logits,
     prediction_is_uncertain,
     preprocess_imagenet,
 )
 from app.inference.knowledge import KnowledgeBase
-from app.inference.plant_guard import looks_like_crop_leaf_photo
+from app.inference.leaf_crop import extract_primary_leaf
+from app.inference.plant_guard import (
+    is_obvious_scene_photo,
+    leaf_plausibility_score,
+    looks_like_crop_leaf_photo,
+)
 from app.inference.reject_messages import unknown_copy
+from app.inference.tomato_gate import NOT_TOMATO_CLASS_ID, TomatoLeafGate, load_tomato_gate
 from app.schemas import ClassAlternative, DetectResponse, DetectionResult
 
 
@@ -50,6 +57,183 @@ def _reject_unknown(
             careRw=unk.careRw,
         ),
         "unknown",
+    )
+
+
+def _plant_guard_reject() -> ClassifyDetails:
+    return ClassifyDetails(
+        probs=np.array([]),
+        top_class_id=None,
+        uncertain=True,
+        rejection_reason="plant_guard",
+        top_confidence=0.0,
+        margin=0.0,
+        alternatives=[],
+        plant_guard_blocked=True,
+    )
+
+
+def _not_tomato_reject(top_confidence: float = 0.0) -> ClassifyDetails:
+    return ClassifyDetails(
+        probs=np.array([]),
+        top_class_id=None,
+        uncertain=True,
+        rejection_reason="not_tomato",
+        top_confidence=top_confidence,
+        margin=0.0,
+        alternatives=[],
+        plant_guard_blocked=False,
+    )
+
+
+def _check_tomato_gate(
+    image: Image.Image, settings: Settings, gate: TomatoLeafGate | None
+) -> ClassifyDetails | None:
+    if gate is None:
+        return None
+    is_tomato, score = gate.is_tomato_leaf(image)
+    if is_tomato:
+        return None
+    return _not_tomato_reject(top_confidence=score)
+
+
+def _run_pre_model_guards(
+    original: Image.Image,
+    settings: Settings,
+    gate: TomatoLeafGate | None,
+) -> tuple[Image.Image, ClassifyDetails | None]:
+    """
+    Gate on the full upload BEFORE auto-crop — cropping can isolate a misleading
+    green patch from non-tomato photos and fool the disease classifier.
+    """
+    original_rgb = original.convert("RGB")
+    blocked = _check_tomato_gate(original_rgb, settings, gate)
+    if blocked is not None:
+        return original_rgb, blocked
+
+    image, blocked = _prepare_image_for_inference(original_rgb, settings)
+    if blocked is not None:
+        return image, blocked
+    blocked = _check_plant_guard(image, settings)
+    if blocked is not None:
+        return image, blocked
+    blocked = _check_tomato_gate(image, settings, gate)
+    if blocked is not None:
+        return image, blocked
+    return image, None
+
+
+def _prepare_image_for_inference(
+    image: Image.Image, settings: Settings
+) -> tuple[Image.Image, ClassifyDetails | None]:
+    if settings.plant_guard_enabled and is_obvious_scene_photo(image):
+        return image, _plant_guard_reject()
+    if settings.leaf_auto_crop_enabled:
+        cropped, _ = extract_primary_leaf(image)
+        return cropped, None
+    return image, None
+
+
+def _check_plant_guard(image: Image.Image, settings: Settings) -> ClassifyDetails | None:
+    if not settings.plant_guard_enabled:
+        return None
+    if not looks_like_crop_leaf_photo(image, min_score=settings.plant_guard_min_score):
+        return _plant_guard_reject()
+    return None
+
+
+def _finalize_probs(
+    image: Image.Image,
+    settings: Settings,
+    probs: np.ndarray,
+    trainable_ids: list[str],
+    disease_names: dict[str, str],
+    expected_classes: int,
+) -> ClassifyDetails:
+    alts = build_alternatives(probs, trainable_ids, disease_names)
+
+    if probs.shape[0] != expected_classes:
+        return ClassifyDetails(
+            probs=probs,
+            top_class_id=None,
+            uncertain=True,
+            rejection_reason="class_count_mismatch",
+            top_confidence=float(np.max(probs)) if probs.size else 0.0,
+            margin=0.0,
+            alternatives=alts,
+        )
+
+    best_i = int(np.argmax(probs))
+    if best_i >= len(trainable_ids):
+        return ClassifyDetails(
+            probs=probs,
+            top_class_id=None,
+            uncertain=True,
+            rejection_reason="class_count_mismatch",
+            top_confidence=float(probs[best_i]),
+            margin=0.0,
+            alternatives=alts,
+        )
+
+    if trainable_ids[best_i] == NOT_TOMATO_CLASS_ID:
+        disease_alts = [a for a in alts if a.class_id != NOT_TOMATO_CLASS_ID]
+        return ClassifyDetails(
+            probs=probs,
+            top_class_id=None,
+            uncertain=True,
+            rejection_reason="not_tomato",
+            top_confidence=float(probs[best_i]),
+            margin=0.0,
+            alternatives=disease_alts,
+        )
+
+    if NOT_TOMATO_CLASS_ID in trainable_ids:
+        nt_i = trainable_ids.index(NOT_TOMATO_CLASS_ID)
+        nt_p = float(probs[nt_i])
+        top_p = float(probs[best_i])
+        if (
+            nt_p >= settings.not_tomato_compete_threshold
+            and (top_p - nt_p) < settings.not_tomato_compete_margin
+        ):
+            disease_alts = [a for a in alts if a.class_id != NOT_TOMATO_CLASS_ID]
+            return ClassifyDetails(
+                probs=probs,
+                top_class_id=None,
+                uncertain=True,
+                rejection_reason="not_tomato",
+                top_confidence=nt_p,
+                margin=top_p - nt_p,
+                alternatives=disease_alts,
+            )
+
+    uncertain, top_p, margin, reason = prediction_is_uncertain(
+        probs,
+        min_confidence=settings.confidence_threshold,
+        min_margin=settings.confidence_margin,
+    )
+
+    if (
+        settings.plant_guard_enabled
+        and not uncertain
+        and is_overconfident_nonleaf(
+            probs,
+            leaf_plausibility_score(image),
+            min_leaf_score=settings.ood_leaf_score_max,
+            confidence_trigger=settings.ood_confidence_trigger,
+        )
+    ):
+        return _plant_guard_reject()
+
+    class_id = None if uncertain else trainable_ids[best_i]
+    disease_alts = [a for a in alts if a.class_id != NOT_TOMATO_CLASS_ID]
+    return ClassifyDetails(
+        probs=probs,
+        top_class_id=class_id,
+        uncertain=uncertain,
+        rejection_reason=reason,
+        top_confidence=top_p,
+        margin=margin,
+        alternatives=disease_alts,
     )
 
 
@@ -93,26 +277,21 @@ class InferenceEngine(ABC):
 class StubEngine(InferenceEngine):
     """Deterministic demo inference without a model file."""
 
-    def __init__(self, kb: KnowledgeBase, settings: Settings) -> None:
+    def __init__(
+        self, kb: KnowledgeBase, settings: Settings, gate: TomatoLeafGate | None = None
+    ) -> None:
         self.kb = kb
         self._settings = settings
-        self._rotating = [cid for cid in kb.class_ids if cid != "unknown"]
+        self._gate = gate
+        self._rotating = [cid for cid in kb.disease_class_ids if cid != "unknown"]
         if not self._rotating:
             self._rotating = list(kb.class_ids)
         self._disease_names = {cid: kb.get(cid).diseaseName for cid in kb.trainable_class_ids}
 
     def classify(self, image: Image.Image) -> ClassifyDetails:
-        if self._settings.plant_guard_enabled and not looks_like_crop_leaf_photo(image):
-            return ClassifyDetails(
-                probs=np.array([]),
-                top_class_id=None,
-                uncertain=True,
-                rejection_reason="plant_guard",
-                top_confidence=0.0,
-                margin=0.0,
-                alternatives=[],
-                plant_guard_blocked=True,
-            )
+        image, blocked = _run_pre_model_guards(image, self._settings, self._gate)
+        if blocked is not None:
+            return blocked
 
         buf = image.tobytes()
         h = int(hashlib.sha256(buf).hexdigest(), 16)
@@ -126,32 +305,31 @@ class StubEngine(InferenceEngine):
             if probs[i] == 0:
                 probs[i] = 0.05 / max(1, n - 2)
 
-        uncertain, top_p, margin, reason = prediction_is_uncertain(
+        return _finalize_probs(
+            image,
+            self._settings,
             probs,
-            min_confidence=self._settings.confidence_threshold,
-            min_margin=self._settings.confidence_margin,
-        )
-        top_id = self._rotating[int(np.argmax(probs))] if not uncertain else None
-        alts = build_alternatives(probs, self._rotating, self._disease_names)
-        return ClassifyDetails(
-            probs=probs,
-            top_class_id=top_id,
-            uncertain=uncertain,
-            rejection_reason=reason,
-            top_confidence=top_p,
-            margin=margin,
-            alternatives=alts,
+            self._rotating,
+            self._disease_names,
+            len(self._rotating),
         )
 
 
 class OnnxEngine(InferenceEngine):
     """ONNX Runtime classifier; class order must match `classes.json` trainable order."""
 
-    def __init__(self, kb: KnowledgeBase, settings: Settings, model_path: Path) -> None:
+    def __init__(
+        self,
+        kb: KnowledgeBase,
+        settings: Settings,
+        model_path: Path,
+        gate: TomatoLeafGate | None = None,
+    ) -> None:
         import onnxruntime as ort
 
         self.kb = kb
         self._settings = settings
+        self._gate = gate
         self._session = ort.InferenceSession(
             str(model_path),
             providers=["CPUExecutionProvider"],
@@ -170,17 +348,9 @@ class OnnxEngine(InferenceEngine):
         return normalize_logits(out)
 
     def classify(self, image: Image.Image) -> ClassifyDetails:
-        if self._settings.plant_guard_enabled and not looks_like_crop_leaf_photo(image):
-            return ClassifyDetails(
-                probs=np.array([]),
-                top_class_id=None,
-                uncertain=True,
-                rejection_reason="plant_guard",
-                top_confidence=0.0,
-                margin=0.0,
-                alternatives=[],
-                plant_guard_blocked=True,
-            )
+        image, blocked = _run_pre_model_guards(image, self._settings, self._gate)
+        if blocked is not None:
+            return blocked
 
         if self._settings.tta_enabled:
             logits = average_tta_logits(
@@ -193,51 +363,30 @@ class OnnxEngine(InferenceEngine):
             logits = self._run_logits(x.astype(np.float32))
 
         probs = logits_to_probs(logits)
-        alts = build_alternatives(probs, self._trainable_ids, self._disease_names)
-
-        if probs.shape[0] != self._expected_classes:
-            return ClassifyDetails(
-                probs=probs,
-                top_class_id=None,
-                uncertain=True,
-                rejection_reason="class_count_mismatch",
-                top_confidence=float(np.max(probs)) if probs.size else 0.0,
-                margin=0.0,
-                alternatives=alts,
-            )
-
-        best_i = int(np.argmax(probs))
-        if best_i >= len(self._trainable_ids):
-            return ClassifyDetails(
-                probs=probs,
-                top_class_id=None,
-                uncertain=True,
-                rejection_reason="class_count_mismatch",
-                top_confidence=float(probs[best_i]),
-                margin=0.0,
-                alternatives=alts,
-            )
-
-        uncertain, top_p, margin, reason = prediction_is_uncertain(
+        return _finalize_probs(
+            image,
+            self._settings,
             probs,
-            min_confidence=self._settings.confidence_threshold,
-            min_margin=self._settings.confidence_margin,
-        )
-        class_id = None if uncertain else self._trainable_ids[best_i]
-        return ClassifyDetails(
-            probs=probs,
-            top_class_id=class_id,
-            uncertain=uncertain,
-            rejection_reason=reason,
-            top_confidence=top_p,
-            margin=margin,
-            alternatives=alts,
+            self._trainable_ids,
+            self._disease_names,
+            self._expected_classes,
         )
 
 
 def get_engine(settings: Settings | None = None) -> InferenceEngine:
     settings = settings or get_settings()
     kb = KnowledgeBase(settings.resolved_classes_path)
+    gate = load_tomato_gate(settings)
+
+    if settings.tomato_gate_enabled and gate is None:
+        gate_path = settings.resolved_gate_path()
+        import warnings
+
+        warnings.warn(
+            f"TOMATO_GATE_ENABLED but gate model not found at {gate_path}. "
+            "Non-tomato images may receive wrong disease labels.",
+            stacklevel=2,
+        )
 
     mode = settings.inference_mode.lower().strip()
     if mode == "onnx":
@@ -246,7 +395,7 @@ def get_engine(settings: Settings | None = None) -> InferenceEngine:
         path = settings.resolved_model_path()
         if path is None or not path.is_file():
             raise FileNotFoundError(f"MODEL_PATH not found: {settings.model_path}")
-        return OnnxEngine(kb, settings, path)
+        return OnnxEngine(kb, settings, path, gate=gate)
 
     if mode == "keras":
         if not settings.model_path:
@@ -254,9 +403,9 @@ def get_engine(settings: Settings | None = None) -> InferenceEngine:
         path = settings.resolved_model_path()
         if path is None or not path.is_file():
             raise FileNotFoundError(f"MODEL_PATH not found: {settings.model_path}")
-        return KerasEngine(kb, settings, path)
+        return KerasEngine(kb, settings, path, gate=gate)
 
-    return StubEngine(kb, settings)
+    return StubEngine(kb, settings, gate=gate)
 
 
 def _preprocess_for_keras(image: Image.Image, settings: Settings) -> np.ndarray:
@@ -277,11 +426,18 @@ def _preprocess_for_keras(image: Image.Image, settings: Settings) -> np.ndarray:
 class KerasEngine(InferenceEngine):
     """TensorFlow/Keras .keras classifier (tomato-only testing)."""
 
-    def __init__(self, kb: KnowledgeBase, settings: Settings, model_path: Path) -> None:
+    def __init__(
+        self,
+        kb: KnowledgeBase,
+        settings: Settings,
+        model_path: Path,
+        gate: TomatoLeafGate | None = None,
+    ) -> None:
         import tensorflow as tf
 
         self.kb = kb
         self._settings = settings
+        self._gate = gate
         self._model = tf.keras.models.load_model(model_path, compile=False)
         last = self._model.layers[-1]
         activation = getattr(last, "activation", None)
@@ -299,17 +455,9 @@ class KerasEngine(InferenceEngine):
         return logits_to_probs(out)
 
     def classify(self, image: Image.Image) -> ClassifyDetails:
-        if self._settings.plant_guard_enabled and not looks_like_crop_leaf_photo(image):
-            return ClassifyDetails(
-                probs=np.array([]),
-                top_class_id=None,
-                uncertain=True,
-                rejection_reason="plant_guard",
-                top_confidence=0.0,
-                margin=0.0,
-                alternatives=[],
-                plant_guard_blocked=True,
-            )
+        image, blocked = _run_pre_model_guards(image, self._settings, self._gate)
+        if blocked is not None:
+            return blocked
 
         if self._settings.tta_enabled:
             flipped = image.transpose(Image.FLIP_LEFT_RIGHT)
@@ -319,34 +467,13 @@ class KerasEngine(InferenceEngine):
         else:
             probs = self._run_probs(_preprocess_for_keras(image, self._settings))
 
-        alts = build_alternatives(probs, self._trainable_ids, self._disease_names)
-
-        if probs.shape[0] != self._expected_classes:
-            return ClassifyDetails(
-                probs=probs,
-                top_class_id=None,
-                uncertain=True,
-                rejection_reason="class_count_mismatch",
-                top_confidence=float(np.max(probs)) if probs.size else 0.0,
-                margin=0.0,
-                alternatives=alts,
-            )
-
-        best_i = int(np.argmax(probs))
-        uncertain, top_p, margin, reason = prediction_is_uncertain(
+        return _finalize_probs(
+            image,
+            self._settings,
             probs,
-            min_confidence=self._settings.confidence_threshold,
-            min_margin=self._settings.confidence_margin,
-        )
-        class_id = None if uncertain else self._trainable_ids[best_i]
-        return ClassifyDetails(
-            probs=probs,
-            top_class_id=class_id,
-            uncertain=uncertain,
-            rejection_reason=reason,
-            top_confidence=top_p,
-            margin=margin,
-            alternatives=alts,
+            self._trainable_ids,
+            self._disease_names,
+            self._expected_classes,
         )
 
 

@@ -23,15 +23,19 @@ _engine: InferenceEngine | None = None
 
 
 def _load_val_accuracy_pct() -> float | None:
-    summary_path = Path(__file__).resolve().parent.parent / "model" / "training_summary.json"
-    if not summary_path.is_file():
-        return None
-    try:
-        data = json.loads(summary_path.read_text(encoding="utf-8"))
-        acc = data.get("metrics", {}).get("val_accuracy")
-        return round(float(acc) * 100, 1) if acc is not None else None
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return None
+    model_dir = Path(__file__).resolve().parent.parent / "model"
+    for name in ("tomato_training_summary.json", "training_summary.json"):
+        summary_path = model_dir / name
+        if not summary_path.is_file():
+            continue
+        try:
+            data = json.loads(summary_path.read_text(encoding="utf-8"))
+            acc = data.get("metrics", {}).get("val_accuracy")
+            if acc is not None:
+                return round(float(acc) * 100, 1)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return None
 
 
 @asynccontextmanager
