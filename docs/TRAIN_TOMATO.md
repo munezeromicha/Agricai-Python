@@ -1,5 +1,7 @@
 # Train tomato leaf disease model
 
+**Dataset layout:** See [DATASET_STRUCTURE.md](./DATASET_STRUCTURE.md) for the full folder standard (train/validation, naming, new crops, and tomato reference).
+
 Scripts:
 - **Disease model (10 or 11 classes):** [`training/train_tomato.py`](../training/train_tomato.py)
 - **Stage 1 gate (tomato vs not):** [`training/train_tomato_gate.py`](../training/train_tomato_gate.py)
