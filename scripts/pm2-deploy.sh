@@ -8,6 +8,12 @@ cd "$ROOT"
 
 APP_NAME="Agricai-Python"
 
+if [[ -f "$ROOT/venv/bin/activate" ]]; then
+  # shellcheck source=/dev/null
+  source "$ROOT/venv/bin/activate"
+  pip install -r requirements.txt
+fi
+
 # Remove every process with this name (avoids duplicate ids fighting for port 8000).
 pm2 delete "$APP_NAME" 2>/dev/null || true
 

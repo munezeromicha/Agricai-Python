@@ -11,7 +11,6 @@ from PIL import ImageOps, UnidentifiedImageError
 from app.config import get_settings
 from app.inference.engine import InferenceEngine, get_engine, run_detect_with_engine
 from app.inference.knowledge import KnowledgeBase
-from app.inference.roboflow import run_roboflow_detect
 from app.schemas import (
     ClassDetailResponse,
     ClassesListResponse,
@@ -161,6 +160,8 @@ def create_app() -> FastAPI:
         mode = settings.inference_mode.lower().strip()
 
         if mode == "roboflow":
+            from app.inference.roboflow import run_roboflow_detect
+
             try:
                 return run_roboflow_detect(raw, settings=settings)
             except RuntimeError as e:

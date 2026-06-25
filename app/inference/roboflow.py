@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from io import BytesIO
 from typing import Any
 
-import httpx
 from PIL import Image
 
 from app.config import Settings, get_settings
@@ -87,6 +90,24 @@ def _prepare_image_bytes(image_bytes: bytes, max_edge: int = 1280) -> tuple[byte
     return image_bytes, w, h
 
 
+def _multipart_body(
+    boundary: bytes,
+    *,
+    file_name: str,
+    file_bytes: bytes,
+    mime: str,
+) -> bytes:
+    crlf = b"\r\n"
+    parts: list[bytes] = [
+        b"--" + boundary + crlf,
+        f'Content-Disposition: form-data; name="file"; filename="{file_name}"'.encode() + crlf,
+        f"Content-Type: {mime}".encode() + crlf + crlf,
+        file_bytes + crlf,
+        b"--" + boundary + b"--" + crlf,
+    ]
+    return b"".join(parts)
+
+
 def _call_roboflow_api(image_bytes: bytes, settings: Settings) -> tuple[dict[str, Any], int, int]:
     """POST raw image bytes to Roboflow serverless (same as their web UI)."""
     image_bytes, img_w, img_h = _prepare_image_bytes(image_bytes)
@@ -99,29 +120,51 @@ def _call_roboflow_api(image_bytes: bytes, settings: Settings) -> tuple[dict[str
     api_conf_pct = max(1, min(40, settings.roboflow_api_confidence_pct))
     overlap_pct = int(round(settings.roboflow_iou_threshold * 100)) if settings.roboflow_iou_threshold <= 1 else int(settings.roboflow_iou_threshold)
 
-    with httpx.Client(timeout=120.0) as client:
-        for attempt in range(2):
-            try:
-                response = client.post(
-                    url,
-                    params={
-                        "api_key": settings.roboflow_api_key,
-                        "confidence": api_conf_pct,
-                        "overlap": overlap_pct,
-                    },
-                    files={"file": ("image.jpg", image_bytes, "image/jpeg")},
-                )
-                break
-            except httpx.RemoteProtocolError:
-                if attempt == 0:
-                    image_bytes, img_w, img_h = _prepare_image_bytes(image_bytes, max_edge=960)
-                    continue
-                raise
-    if response.status_code >= 400:
-        detail = response.text[:500]
-        raise RuntimeError(f"Roboflow API error {response.status_code}: {detail}")
+    query = urllib.parse.urlencode(
+        {
+            "api_key": settings.roboflow_api_key,
+            "confidence": api_conf_pct,
+            "overlap": overlap_pct,
+        }
+    )
+    full_url = f"{url}?{query}"
+    boundary = uuid.uuid4().hex.encode()
+    payload = b""
+    status = 0
 
-    raw = response.json()
+    for attempt in range(2):
+        try:
+            body = _multipart_body(
+                boundary,
+                file_name="image.jpg",
+                file_bytes=image_bytes,
+                mime="image/jpeg",
+            )
+            request = urllib.request.Request(
+                full_url,
+                data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary.decode()}"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=120) as response:
+                status = response.status
+                payload = response.read()
+            break
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(f"Roboflow API error {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            if attempt == 0:
+                image_bytes, img_w, img_h = _prepare_image_bytes(image_bytes, max_edge=960)
+                boundary = uuid.uuid4().hex.encode()
+                continue
+            raise RuntimeError(f"Roboflow API connection failed: {exc}") from exc
+
+    if status >= 400:
+        detail = payload.decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"Roboflow API error {status}: {detail}")
+
+    raw = json.loads(payload)
     if not isinstance(raw, dict):
         raise RuntimeError("Unexpected Roboflow response format.")
 
