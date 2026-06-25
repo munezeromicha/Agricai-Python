@@ -35,6 +35,19 @@ class ClassAlternative(BaseModel):
     confidence: float = Field(..., ge=0, le=100)
 
 
+class DetectionBox(BaseModel):
+    """Roboflow object-detection region (center x/y and size in image pixels)."""
+
+    class_name: str
+    class_id: str | None = None
+    confidence: float = Field(..., ge=0, le=100)
+    x: float
+    y: float
+    width: float
+    height: float
+    color: str = "#14b8a6"
+
+
 class DetectResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
@@ -47,6 +60,12 @@ class DetectResponse(BaseModel):
     alternatives: list[ClassAlternative] = Field(default_factory=list)
     top_confidence_pct: float | None = None
     confidence_margin_pct: float | None = None
+    tomato_gate_score_pct: float | None = None
+    tomato_gate_soft_pass: bool | None = None
+    detections: list[DetectionBox] = Field(default_factory=list)
+    image_width: int | None = None
+    image_height: int | None = None
+    roboflow_model_id: str | None = None
 
 
 class HealthResponse(BaseModel):

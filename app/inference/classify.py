@@ -38,6 +38,8 @@ class ClassifyDetails:
     margin: float
     alternatives: list[ClassScore]
     plant_guard_blocked: bool = False
+    tomato_gate_score: float | None = None
+    tomato_gate_soft_pass: bool = False
 
 
 def channel_dim_index(shape: tuple) -> int | None:

@@ -48,19 +48,25 @@ class TomatoLeafGate:
             return 0.0
         return float(out[TOMATO_LEAF_INDEX])
 
-    def tomato_leaf_score(self, image: Image.Image) -> float:
+    def tomato_leaf_score(
+        self, image: Image.Image, settings: Settings | None = None
+    ) -> float:
         """Return 0–1 probability that the image is a tomato leaf."""
-        batch = preprocess_gate_image(image, self._settings)
-        if self._settings.tta_enabled:
+        cfg = settings or self._settings
+        batch = preprocess_gate_image(image, cfg)
+        if cfg.tta_enabled:
             flipped = image.transpose(Image.FLIP_LEFT_RIGHT)
             p1 = self._tomato_probability(batch)
-            p2 = self._tomato_probability(preprocess_gate_image(flipped, self._settings))
+            p2 = self._tomato_probability(preprocess_gate_image(flipped, cfg))
             return (p1 + p2) / 2.0
         return self._tomato_probability(batch)
 
-    def is_tomato_leaf(self, image: Image.Image) -> tuple[bool, float]:
-        score = self.tomato_leaf_score(image)
-        return score >= self._settings.tomato_gate_threshold, score
+    def is_tomato_leaf(
+        self, image: Image.Image, settings: Settings | None = None
+    ) -> tuple[bool, float]:
+        cfg = settings or self._settings
+        score = self.tomato_leaf_score(image, cfg)
+        return score >= cfg.tomato_gate_threshold, score
 
 
 def load_tomato_gate(settings: Settings) -> TomatoLeafGate | None:

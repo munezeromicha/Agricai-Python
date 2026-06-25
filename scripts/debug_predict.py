@@ -63,6 +63,13 @@ def analyze_one(path: Path, settings: Settings) -> None:
     print(f"  threshold:   {settings.confidence_threshold:.0%}")
     print(f"  margin:      {settings.confidence_margin:.0%}")
 
+    if details.tomato_gate_score is not None and settings.tomato_gate_enabled:
+        print(f"  tomato_gate: {details.tomato_gate_score:.1%}" + (
+            " (soft pass — field photo)" if details.tomato_gate_soft_pass else ""
+        ))
+    elif not settings.tomato_gate_enabled:
+        print("  tomato_gate:  disabled")
+
     if details.plant_guard_blocked:
         print("  => REJECTED (plant_guard)")
         return

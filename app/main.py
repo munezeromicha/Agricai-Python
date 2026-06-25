@@ -6,10 +6,12 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
-from PIL import UnidentifiedImageError
+from PIL import ImageOps, UnidentifiedImageError
 
 from app.config import get_settings
 from app.inference.engine import InferenceEngine, get_engine, run_detect_with_engine
+from app.inference.knowledge import KnowledgeBase
+from app.inference.roboflow import run_roboflow_detect
 from app.schemas import (
     ClassDetailResponse,
     ClassesListResponse,
@@ -41,7 +43,11 @@ def _load_val_accuracy_pct() -> float | None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _engine
-    _engine = get_engine()
+    settings = get_settings()
+    if settings.inference_mode.lower().strip() == "roboflow":
+        _engine = None
+    else:
+        _engine = get_engine()
     yield
     _engine = None
 
@@ -70,14 +76,30 @@ def create_app() -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
+        cfg = get_settings()
         return HealthResponse(
             status="ok",
-            model_version=settings.model_version,
-            inference_mode=settings.inference_mode,
+            model_version=cfg.model_version,
+            inference_mode=cfg.inference_mode,
         )
 
     @app.get("/v1/models", response_model=ModelInfoResponse)
     def model_info() -> ModelInfoResponse:
+        settings = get_settings()
+        if settings.inference_mode.lower().strip() == "roboflow":
+            kb = KnowledgeBase(settings.resolved_classes_path)
+            return ModelInfoResponse(
+                model_version=settings.model_version,
+                inference_mode="roboflow",
+                input_size=settings.input_size,
+                num_classes=kb.num_trainable_classes,
+                plant_guard_enabled=False,
+                tta_enabled=False,
+                confidence_threshold=settings.roboflow_confidence_threshold,
+                confidence_margin=0.0,
+                val_accuracy_pct=None,
+                target_accuracy_pct=98.0,
+            )
         if _engine is None:
             raise HTTPException(status_code=503, detail="Inference engine not ready.")
         return ModelInfoResponse(
@@ -95,8 +117,8 @@ def create_app() -> FastAPI:
 
     @app.get("/v1/classes", response_model=ClassesListResponse)
     def list_classes() -> ClassesListResponse:
-        if _engine is None:
-            raise HTTPException(status_code=503, detail="Inference engine not ready.")
+        settings = get_settings()
+        kb = _engine.kb if _engine is not None else KnowledgeBase(settings.resolved_classes_path)
         classes = [
             ClassSummary(
                 class_id=entry.class_id,
@@ -104,8 +126,8 @@ def create_app() -> FastAPI:
                 diseaseName=entry.diseaseName,
                 diseaseNameRw=entry.diseaseNameRw,
             )
-            for cid in _engine.kb.class_ids
-            for entry in [_engine.kb.try_get(cid)]
+            for cid in kb.class_ids
+            for entry in [kb.try_get(cid)]
             if entry is not None
         ]
         return ClassesListResponse(
@@ -116,14 +138,14 @@ def create_app() -> FastAPI:
 
     @app.get("/v1/classes/{class_id}", response_model=ClassDetailResponse)
     def class_detail(class_id: str) -> ClassDetailResponse:
-        if _engine is None:
-            raise HTTPException(status_code=503, detail="Inference engine not ready.")
-        entry = _engine.kb.try_get(class_id)
+        settings = get_settings()
+        kb = _engine.kb if _engine is not None else KnowledgeBase(settings.resolved_classes_path)
+        entry = kb.try_get(class_id)
         if entry is None:
             raise HTTPException(status_code=404, detail="Class not found.")
         return ClassDetailResponse(
             class_id=class_id,
-            result=_engine.kb.to_detection(entry, confidence_pct=0.0),
+            result=kb.to_detection(entry, confidence_pct=0.0),
         )
 
     @app.post("/v1/detect", response_model=DetectResponse)
@@ -135,8 +157,19 @@ def create_app() -> FastAPI:
         if len(raw) > 15 * 1024 * 1024:
             raise HTTPException(status_code=413, detail="Image too large (max 15 MB).")
 
+        settings = get_settings()
+        mode = settings.inference_mode.lower().strip()
+
+        if mode == "roboflow":
+            try:
+                return run_roboflow_detect(raw, settings=settings)
+            except RuntimeError as e:
+                raise HTTPException(status_code=503, detail=str(e)) from e
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Roboflow inference failed: {e}") from e
+
         try:
-            image = Image.open(BytesIO(raw))
+            image = ImageOps.exif_transpose(Image.open(BytesIO(raw)))
             image.load()
         except (UnidentifiedImageError, OSError):
             raise HTTPException(status_code=400, detail="Could not decode image.")

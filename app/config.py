@@ -1,4 +1,3 @@
-from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,7 +14,7 @@ class Settings(BaseSettings):
     # CORS: comma-separated origins, e.g. http://localhost:5173,http://127.0.0.1:5173
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
-    # stub | onnx | keras
+    # stub | onnx | keras | roboflow
     inference_mode: str = "stub"
     model_path: str | None = None
     model_version: str = "0.0.0-stub"
@@ -54,11 +53,29 @@ class Settings(BaseSettings):
     # Stage 1 binary gate — tomato leaf vs everything else (model/tomato_leaf_gate.keras)
     tomato_gate_enabled: bool = True
     tomato_gate_path: str | None = "model/tomato_leaf_gate.keras"
-    tomato_gate_threshold: float = 0.60
+    # Pass gate when tomato_leaf score >= this (0–1).
+    tomato_gate_threshold: float = 0.48
+    # Below this score on both full + cropped views → hard reject (clearly not tomato).
+    tomato_gate_hard_reject: float = 0.22
+    # Between hard_reject and threshold: still run disease model (field/garden photos).
+    tomato_gate_soft_pass: bool = True
+    # Use max(gate score on full photo, gate score on auto-cropped leaf).
+    tomato_gate_use_cropped: bool = True
+    # When plant-guard leaf score is this high, run disease model even if gate score is low.
+    tomato_gate_bypass_min_leaf_score: float = 0.62
 
     # 11-class model: reject when Not_Tomato probability is competitive with top disease
     not_tomato_compete_threshold: float = 0.28
     not_tomato_compete_margin: float = 0.18
+
+    # Roboflow serverless object detection (INFERENCE_MODE=roboflow)
+    roboflow_api_url: str = "https://serverless.roboflow.com"
+    roboflow_api_key: str | None = None
+    roboflow_model_id: str = "tomato-disease-b518h/3"
+    # Filter predictions below this confidence (0–1), matches Roboflow UI default 50%
+    roboflow_confidence_threshold: float = 0.50
+    roboflow_api_confidence_pct: int = 10
+    roboflow_iou_threshold: float = 0.50
 
     @property
     def project_root(self) -> Path:
@@ -90,6 +107,6 @@ class Settings(BaseSettings):
         return p
 
 
-@lru_cache
 def get_settings() -> Settings:
+    """Read settings on each call so .env changes apply without a full process restart."""
     return Settings()

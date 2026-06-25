@@ -83,49 +83,88 @@ def _not_tomato_reject(top_confidence: float = 0.0) -> ClassifyDetails:
         margin=0.0,
         alternatives=[],
         plant_guard_blocked=False,
+        tomato_gate_score=top_confidence,
     )
 
 
-def _check_tomato_gate(
-    image: Image.Image, settings: Settings, gate: TomatoLeafGate | None
-) -> ClassifyDetails | None:
-    if gate is None:
-        return None
-    is_tomato, score = gate.is_tomato_leaf(image)
-    if is_tomato:
-        return None
-    return _not_tomato_reject(top_confidence=score)
+def _tomato_gate_best_score(
+    original: Image.Image,
+    cropped: Image.Image,
+    gate: TomatoLeafGate,
+    settings: Settings,
+) -> float:
+    """Score 0–1; uses the better of full-frame vs auto-cropped leaf."""
+    s_full = gate.tomato_leaf_score(original, settings)
+    if not settings.tomato_gate_use_cropped:
+        return s_full
+    s_crop = gate.tomato_leaf_score(cropped, settings)
+    return max(s_full, s_crop)
+
+
+def _evaluate_tomato_gate(
+    score: float,
+    settings: Settings,
+    *,
+    leaf_score: float | None = None,
+) -> tuple[ClassifyDetails | None, bool]:
+    """
+    Returns (reject details or None, soft_pass).
+    soft_pass=True → run disease model even though gate score < threshold.
+    """
+    if score >= settings.tomato_gate_threshold:
+        return None, False
+    if (
+        leaf_score is not None
+        and leaf_score >= settings.tomato_gate_bypass_min_leaf_score
+    ):
+        return None, True
+    if score < settings.tomato_gate_hard_reject:
+        return _not_tomato_reject(top_confidence=score), False
+    if settings.tomato_gate_soft_pass:
+        return None, True
+    return _not_tomato_reject(top_confidence=score), False
 
 
 def _run_pre_model_guards(
     original: Image.Image,
     settings: Settings,
     gate: TomatoLeafGate | None,
-) -> tuple[Image.Image, ClassifyDetails | None]:
+) -> tuple[Image.Image, ClassifyDetails | None, bool, float]:
     """
-    Gate on the full upload BEFORE auto-crop — cropping can isolate a misleading
-    green patch from non-tomato photos and fool the disease classifier.
-    """
-    original_rgb = original.convert("RGB")
-    blocked = _check_tomato_gate(original_rgb, settings, gate)
-    if blocked is not None:
-        return original_rgb, blocked
+  Prepare image for the disease model.
 
-    image, blocked = _prepare_image_for_inference(original_rgb, settings)
+  Order: obvious-scene check → auto-crop → plant guard → tomato gate (best of full/crop).
+  Field photos often fail gate on the full frame but pass on the cropped leaf.
+  """
+    original_rgb = original.convert("RGB")
+
+    if settings.plant_guard_enabled and is_obvious_scene_photo(original_rgb):
+        return original_rgb, _plant_guard_reject(), False, 0.0
+
+    cropped = original_rgb
+    if settings.leaf_auto_crop_enabled:
+        cropped, _ = extract_primary_leaf(original_rgb)
+
+    blocked = _check_plant_guard(cropped, settings)
     if blocked is not None:
-        return image, blocked
-    blocked = _check_plant_guard(image, settings)
-    if blocked is not None:
-        return image, blocked
-    blocked = _check_tomato_gate(image, settings, gate)
-    if blocked is not None:
-        return image, blocked
-    return image, None
+        return cropped, blocked, False, 0.0
+
+    leaf_score = leaf_plausibility_score(cropped)
+
+    if gate is not None:
+        score = _tomato_gate_best_score(original_rgb, cropped, gate, settings)
+        blocked, soft = _evaluate_tomato_gate(score, settings, leaf_score=leaf_score)
+        if blocked is not None:
+            return cropped, blocked, False, score
+        return cropped, None, soft, score
+
+    return cropped, None, False, 1.0
 
 
 def _prepare_image_for_inference(
     image: Image.Image, settings: Settings
 ) -> tuple[Image.Image, ClassifyDetails | None]:
+    """Legacy helper — prefer _run_pre_model_guards for full pipeline."""
     if settings.plant_guard_enabled and is_obvious_scene_photo(image):
         return image, _plant_guard_reject()
     if settings.leaf_auto_crop_enabled:
@@ -149,6 +188,9 @@ def _finalize_probs(
     trainable_ids: list[str],
     disease_names: dict[str, str],
     expected_classes: int,
+    *,
+    tomato_gate_soft_pass: bool = False,
+    tomato_gate_score: float | None = None,
 ) -> ClassifyDetails:
     alts = build_alternatives(probs, trainable_ids, disease_names)
 
@@ -161,6 +203,8 @@ def _finalize_probs(
             top_confidence=float(np.max(probs)) if probs.size else 0.0,
             margin=0.0,
             alternatives=alts,
+            tomato_gate_score=tomato_gate_score,
+            tomato_gate_soft_pass=tomato_gate_soft_pass,
         )
 
     best_i = int(np.argmax(probs))
@@ -173,10 +217,52 @@ def _finalize_probs(
             top_confidence=float(probs[best_i]),
             margin=0.0,
             alternatives=alts,
+            tomato_gate_score=tomato_gate_score,
+            tomato_gate_soft_pass=tomato_gate_soft_pass,
         )
+
+    # Gate soft-pass: prefer a confident disease label over Not_Tomato for field photos.
+    if (
+        tomato_gate_soft_pass
+        and NOT_TOMATO_CLASS_ID in trainable_ids
+        and trainable_ids[best_i] == NOT_TOMATO_CLASS_ID
+    ):
+        disease_indices = [
+            i for i, cid in enumerate(trainable_ids) if cid != NOT_TOMATO_CLASS_ID
+        ]
+        if disease_indices:
+            di = max(disease_indices, key=lambda i: float(probs[i]))
+            if float(probs[di]) >= settings.confidence_threshold:
+                best_i = di
 
     if trainable_ids[best_i] == NOT_TOMATO_CLASS_ID:
         disease_alts = [a for a in alts if a.class_id != NOT_TOMATO_CLASS_ID]
+        disease_indices = [
+            i for i, cid in enumerate(trainable_ids) if cid != NOT_TOMATO_CLASS_ID
+        ]
+        leaf_score = leaf_plausibility_score(image)
+        field_tomato_leaf = (
+            tomato_gate_soft_pass
+            and settings.plant_guard_enabled
+            and leaf_score >= settings.tomato_gate_bypass_min_leaf_score
+            and disease_indices
+        )
+        if field_tomato_leaf:
+            di = max(disease_indices, key=lambda i: float(probs[i]))
+            best_p = float(probs[di])
+            ranked = sorted((float(probs[i]) for i in disease_indices), reverse=True)
+            margin = best_p - (ranked[1] if len(ranked) > 1 else 0.0)
+            return ClassifyDetails(
+                probs=probs,
+                top_class_id=None,
+                uncertain=True,
+                rejection_reason="low_confidence",
+                top_confidence=best_p,
+                margin=margin,
+                alternatives=disease_alts,
+                tomato_gate_score=tomato_gate_score,
+                tomato_gate_soft_pass=tomato_gate_soft_pass,
+            )
         return ClassifyDetails(
             probs=probs,
             top_class_id=None,
@@ -185,25 +271,45 @@ def _finalize_probs(
             top_confidence=float(probs[best_i]),
             margin=0.0,
             alternatives=disease_alts,
+            tomato_gate_score=tomato_gate_score,
+            tomato_gate_soft_pass=tomato_gate_soft_pass,
         )
 
     if NOT_TOMATO_CLASS_ID in trainable_ids:
         nt_i = trainable_ids.index(NOT_TOMATO_CLASS_ID)
         nt_p = float(probs[nt_i])
         top_p = float(probs[best_i])
-        if (
-            nt_p >= settings.not_tomato_compete_threshold
-            and (top_p - nt_p) < settings.not_tomato_compete_margin
-        ):
+        compete_thresh = settings.not_tomato_compete_threshold
+        compete_margin = settings.not_tomato_compete_margin
+        if tomato_gate_soft_pass:
+            compete_thresh = min(0.55, compete_thresh + 0.12)
+            compete_margin = min(0.28, compete_margin + 0.06)
+        if nt_p >= compete_thresh and (top_p - nt_p) < compete_margin:
             disease_alts = [a for a in alts if a.class_id != NOT_TOMATO_CLASS_ID]
+            if tomato_gate_soft_pass and top_p >= settings.confidence_threshold:
+                reason: RejectionReason = "low_margin"
+            else:
+                return ClassifyDetails(
+                    probs=probs,
+                    top_class_id=None,
+                    uncertain=True,
+                    rejection_reason="not_tomato",
+                    top_confidence=nt_p,
+                    margin=top_p - nt_p,
+                    alternatives=disease_alts,
+                    tomato_gate_score=tomato_gate_score,
+                    tomato_gate_soft_pass=tomato_gate_soft_pass,
+                )
             return ClassifyDetails(
                 probs=probs,
                 top_class_id=None,
                 uncertain=True,
-                rejection_reason="not_tomato",
-                top_confidence=nt_p,
+                rejection_reason=reason,
+                top_confidence=top_p,
                 margin=top_p - nt_p,
                 alternatives=disease_alts,
+                tomato_gate_score=tomato_gate_score,
+                tomato_gate_soft_pass=tomato_gate_soft_pass,
             )
 
     uncertain, top_p, margin, reason = prediction_is_uncertain(
@@ -234,6 +340,8 @@ def _finalize_probs(
         top_confidence=top_p,
         margin=margin,
         alternatives=disease_alts,
+        tomato_gate_score=tomato_gate_score,
+        tomato_gate_soft_pass=tomato_gate_soft_pass,
     )
 
 
@@ -289,7 +397,11 @@ class StubEngine(InferenceEngine):
         self._disease_names = {cid: kb.get(cid).diseaseName for cid in kb.trainable_class_ids}
 
     def classify(self, image: Image.Image) -> ClassifyDetails:
-        image, blocked = _run_pre_model_guards(image, self._settings, self._gate)
+        settings = get_settings()
+        gate = _resolve_gate(settings)
+        image, blocked, gate_soft, gate_score = _run_pre_model_guards(
+            image, settings, gate
+        )
         if blocked is not None:
             return blocked
 
@@ -307,11 +419,13 @@ class StubEngine(InferenceEngine):
 
         return _finalize_probs(
             image,
-            self._settings,
+            settings,
             probs,
             self._rotating,
             self._disease_names,
             len(self._rotating),
+            tomato_gate_soft_pass=gate_soft,
+            tomato_gate_score=gate_score,
         )
 
 
@@ -348,29 +462,54 @@ class OnnxEngine(InferenceEngine):
         return normalize_logits(out)
 
     def classify(self, image: Image.Image) -> ClassifyDetails:
-        image, blocked = _run_pre_model_guards(image, self._settings, self._gate)
+        settings = get_settings()
+        gate = _resolve_gate(settings)
+        image, blocked, gate_soft, gate_score = _run_pre_model_guards(
+            image, settings, gate
+        )
         if blocked is not None:
             return blocked
 
-        if self._settings.tta_enabled:
+        if settings.tta_enabled:
             logits = average_tta_logits(
-                self._run_logits, image, self._settings, self._input_layout
+                self._run_logits, image, settings, self._input_layout
             )
         else:
             x = preprocess_imagenet(
-                image, self._settings.input_size, layout=self._input_layout
+                image, settings.input_size, layout=self._input_layout
             )
             logits = self._run_logits(x.astype(np.float32))
 
         probs = logits_to_probs(logits)
         return _finalize_probs(
             image,
-            self._settings,
+            settings,
             probs,
             self._trainable_ids,
             self._disease_names,
             self._expected_classes,
+            tomato_gate_soft_pass=gate_soft,
+            tomato_gate_score=gate_score,
         )
+
+
+_gate_cache_key: str | None = None
+_gate_cache: TomatoLeafGate | None = None
+
+
+def _resolve_gate(settings: Settings) -> TomatoLeafGate | None:
+    """Load gate once per model path; thresholds still read from fresh settings."""
+    global _gate_cache_key, _gate_cache
+    if not settings.tomato_gate_enabled:
+        return None
+    path = settings.resolved_gate_path()
+    if path is None or not path.is_file():
+        return None
+    key = str(path.resolve())
+    if _gate_cache_key != key or _gate_cache is None:
+        _gate_cache_key = key
+        _gate_cache = TomatoLeafGate(settings, path)
+    return _gate_cache
 
 
 def get_engine(settings: Settings | None = None) -> InferenceEngine:
@@ -455,25 +594,31 @@ class KerasEngine(InferenceEngine):
         return logits_to_probs(out)
 
     def classify(self, image: Image.Image) -> ClassifyDetails:
-        image, blocked = _run_pre_model_guards(image, self._settings, self._gate)
+        settings = get_settings()
+        gate = _resolve_gate(settings)
+        image, blocked, gate_soft, gate_score = _run_pre_model_guards(
+            image, settings, gate
+        )
         if blocked is not None:
             return blocked
 
-        if self._settings.tta_enabled:
+        if settings.tta_enabled:
             flipped = image.transpose(Image.FLIP_LEFT_RIGHT)
-            p1 = self._run_probs(_preprocess_for_keras(image, self._settings))
-            p2 = self._run_probs(_preprocess_for_keras(flipped, self._settings))
+            p1 = self._run_probs(_preprocess_for_keras(image, settings))
+            p2 = self._run_probs(_preprocess_for_keras(flipped, settings))
             probs = (p1 + p2) / 2.0
         else:
-            probs = self._run_probs(_preprocess_for_keras(image, self._settings))
+            probs = self._run_probs(_preprocess_for_keras(image, settings))
 
         return _finalize_probs(
             image,
-            self._settings,
+            settings,
             probs,
             self._trainable_ids,
             self._disease_names,
             self._expected_classes,
+            tomato_gate_soft_pass=gate_soft,
+            tomato_gate_score=gate_score,
         )
 
 
@@ -493,4 +638,10 @@ def run_detect_with_engine(
         alternatives=_alternatives_to_schema(details.alternatives),
         top_confidence_pct=round(details.top_confidence * 100.0, 1),
         confidence_margin_pct=round(details.margin * 100.0, 1),
+        tomato_gate_score_pct=(
+            round(details.tomato_gate_score * 100.0, 1)
+            if details.tomato_gate_score is not None
+            else None
+        ),
+        tomato_gate_soft_pass=details.tomato_gate_soft_pass or None,
     )
