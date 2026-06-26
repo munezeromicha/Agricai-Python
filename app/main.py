@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from PIL import ImageOps, UnidentifiedImageError
@@ -15,9 +15,12 @@ from app.schemas import (
     ClassDetailResponse,
     ClassesListResponse,
     ClassSummary,
+    CropSummary,
+    CropsListResponse,
     DetectResponse,
     HealthResponse,
     ModelInfoResponse,
+    ValidateLeafResponse,
 )
 
 _engine: InferenceEngine | None = None
@@ -147,8 +150,65 @@ def create_app() -> FastAPI:
             result=kb.to_detection(entry, confidence_pct=0.0),
         )
 
+    @app.get("/v1/crops", response_model=CropsListResponse)
+    def list_crops_endpoint() -> CropsListResponse:
+        import os
+
+        from app.inference.crops.registry import DEFAULT_CROP_ID, list_crops
+
+        crops: list[CropSummary] = []
+        for crop in list_crops():
+            workflow_ok = True
+            if crop.inference_kind == "workflow" and crop.workflow_id_env:
+                workflow_ok = bool(os.environ.get(crop.workflow_id_env, "").strip())
+            crops.append(
+                CropSummary(
+                    id=crop.id,
+                    display_name=crop.display_name,
+                    inference_kind=crop.inference_kind,
+                    model_id=crop.model_id,
+                    workflow_configured=workflow_ok,
+                )
+            )
+        return CropsListResponse(crops=crops, default_crop_id=DEFAULT_CROP_ID)
+
+    @app.post("/v1/validate-leaf", response_model=ValidateLeafResponse)
+    async def validate_leaf(
+        file: UploadFile = File(...),
+        crop: str = Form(default="tomato"),
+    ) -> ValidateLeafResponse:
+        if not file.content_type or not file.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="Expected an image file (image/*).")
+
+        raw = await file.read()
+        if len(raw) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Image too large for live validation (max 5 MB).")
+
+        settings = get_settings()
+        if settings.inference_mode.lower().strip() != "roboflow":
+            raise HTTPException(status_code=503, detail="Leaf validation requires INFERENCE_MODE=roboflow.")
+
+        from app.inference.crops.registry import get_crop
+        from app.inference.roboflow import validate_crop_leaf
+
+        try:
+            get_crop(crop)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        try:
+            data = validate_crop_leaf(raw, crop_id=crop, settings=settings)
+            return ValidateLeafResponse(**data)
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Leaf validation failed: {e}") from e
+
     @app.post("/v1/detect", response_model=DetectResponse)
-    async def detect(file: UploadFile = File(...)) -> DetectResponse:
+    async def detect(
+        file: UploadFile = File(...),
+        crop: str = Form(default="tomato"),
+    ) -> DetectResponse:
         if not file.content_type or not file.content_type.startswith("image/"):
             raise HTTPException(status_code=400, detail="Expected an image file (image/*).")
 
@@ -160,10 +220,16 @@ def create_app() -> FastAPI:
         mode = settings.inference_mode.lower().strip()
 
         if mode == "roboflow":
+            from app.inference.crops.registry import get_crop
             from app.inference.roboflow import run_roboflow_detect
 
             try:
-                return run_roboflow_detect(raw, settings=settings)
+                get_crop(crop)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+
+            try:
+                return run_roboflow_detect(raw, crop_id=crop, settings=settings)
             except RuntimeError as e:
                 raise HTTPException(status_code=503, detail=str(e)) from e
             except Exception as e:

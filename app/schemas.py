@@ -6,6 +6,7 @@ DiseaseType = Literal["healthy", "disease", "pest", "unknown"]
 RejectionReason = Literal[
     "plant_guard",
     "not_tomato",
+    "wrong_crop",
     "low_confidence",
     "low_margin",
     "class_count_mismatch",
@@ -66,6 +67,31 @@ class DetectResponse(BaseModel):
     image_width: int | None = None
     image_height: int | None = None
     roboflow_model_id: str | None = None
+    crop_id: str | None = None
+
+
+class CropSummary(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    id: str
+    display_name: str
+    inference_kind: str
+    model_id: str | None = None
+    workflow_configured: bool = False
+
+
+class CropsListResponse(BaseModel):
+    crops: list[CropSummary]
+    default_crop_id: str = "tomato"
+
+
+class ValidateLeafResponse(BaseModel):
+    crop_id: str
+    status: Literal["match", "mismatch", "uncertain", "no_detection"]
+    crop_match: bool
+    top_class: str | None = None
+    top_confidence_pct: float | None = None
+    message: str
 
 
 class HealthResponse(BaseModel):

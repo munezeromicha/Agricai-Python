@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     roboflow_confidence_threshold: float = 0.50
     roboflow_api_confidence_pct: int = 10
     roboflow_iou_threshold: float = 0.50
+    roboflow_workspace_name: str = "pro-grammer"
 
     @property
     def project_root(self) -> Path:
