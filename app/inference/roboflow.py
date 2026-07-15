@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 import urllib.error
 import urllib.parse
@@ -13,12 +14,17 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+logger = logging.getLogger(__name__)
+
+from PIL import Image, ImageOps
 
 from app.config import Settings, get_settings
+from app.inference.crop_gate import COVERED_CROPS, get_crop_gate
 from app.inference.crops.registry import get_crop, resolve_workflow_id
 from app.inference.crops.types import CropConfig
+from app.inference.image_quality import QualityIssue, assess_image_quality
 from app.inference.knowledge import KnowledgeBase
+from app.inference.plant_guard import is_obvious_scene_photo, looks_like_crop_leaf_photo
 from app.schemas import ClassAlternative, DetectResponse, DetectionBox, DetectionResult
 
 _CLASS_COLORS: dict[str, str] = {
@@ -363,18 +369,39 @@ def _model_label(crop: CropConfig, settings: Settings) -> str:
     return crop.resolved_model_id()
 
 
-def _class_matches_crop(class_name: str, crop: CropConfig) -> bool:
+# Keywords shared by almost every crop's own disease labels (e.g. "healthy", "leaf spot").
+# A match on one of these alone is weak evidence — the wrong crop's model can just as
+# easily emit one of these words. Require extra confidence before trusting them.
+_GENERIC_MATCH_KEYWORDS: frozenset[str] = frozenset(
+    {"leaf", "healthy", "disease", "spot", "rust", "rot", "blight", "mosaic"}
+)
+_GENERIC_MATCH_MIN_CONFIDENCE_PCT = 45.0
+
+
+def _crop_keyword_tiers(crop: CropConfig) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    strong = tuple(kw for kw in crop.validation_keywords if kw not in _GENERIC_MATCH_KEYWORDS)
+    weak = tuple(kw for kw in crop.validation_keywords if kw in _GENERIC_MATCH_KEYWORDS)
+    return strong, weak
+
+
+def _class_match_strength(class_name: str, confidence_pct: float, crop: CropConfig) -> bool:
     if not crop.validation_keywords:
         return True
     norm = _normalize_label(class_name)
-    return any(kw in norm for kw in crop.validation_keywords)
+    strong, weak = _crop_keyword_tiers(crop)
+    if any(kw in norm for kw in strong):
+        return True
+    return any(kw in norm for kw in weak) and confidence_pct >= _GENERIC_MATCH_MIN_CONFIDENCE_PCT
 
 
 def _assess_crop_match(preds: list[dict[str, Any]], crop: CropConfig) -> tuple[bool, str | None, float]:
     """Return (matches_crop, top_alien_class, top_confidence_pct)."""
     if not preds:
         return True, None, 0.0
-    if any(_class_matches_crop(str(p.get("class", "")), crop) for p in preds):
+    if any(
+        _class_match_strength(str(p.get("class", "")), float(p.get("confidence", 0)) * 100.0, crop)
+        for p in preds
+    ):
         return True, None, 0.0
     best = max(preds, key=lambda p: float(p.get("confidence", 0)))
     conf = float(best.get("confidence", 0)) * 100.0
@@ -451,6 +478,62 @@ def validate_crop_leaf(
     }
 
 
+def _reject_response(
+    crop: CropConfig,
+    kb: KnowledgeBase,
+    *,
+    reason: str,
+    title_en: str,
+    title_rw: str,
+    explanation_en: str,
+    explanation_rw: str,
+    version: str,
+    model_label: str | None = None,
+    top_class_id: str = "unknown",
+    top_confidence_pct: float = 0.0,
+    confidence_margin_pct: float | None = None,
+    alternatives: list[ClassAlternative] | None = None,
+    detections: list[DetectionBox] | None = None,
+    img_w: int = 0,
+    img_h: int = 0,
+    tta_ran: bool | None = None,
+    tta_agreed: bool | None = None,
+) -> DetectResponse:
+    """Shared builder for "no diagnosis, here's why" responses on the Roboflow path."""
+    unk = kb.get("unknown")
+    return DetectResponse(
+        result=DetectionResult(
+            diseaseName=title_en,
+            diseaseNameRw=title_rw,
+            confidence=0.0,
+            type="unknown",
+            explanation=explanation_en,
+            explanationRw=explanation_rw,
+            treatment=unk.treatment,
+            treatmentRw=unk.treatmentRw,
+            prevention=unk.prevention,
+            preventionRw=unk.preventionRw,
+            care=unk.care,
+            careRw=unk.careRw,
+        ),
+        model_version=version,
+        request_id=str(uuid.uuid4()),
+        inference_mode="roboflow",
+        crop_id=crop.id,
+        top_class_id=top_class_id,
+        rejection_reason=reason,  # type: ignore[arg-type]
+        alternatives=alternatives or [],
+        top_confidence_pct=round(top_confidence_pct, 1),
+        confidence_margin_pct=round(confidence_margin_pct, 1) if confidence_margin_pct is not None else None,
+        tta_ran=tta_ran,
+        tta_agreed=tta_agreed,
+        detections=detections or [],
+        image_width=img_w,
+        image_height=img_h,
+        roboflow_model_id=model_label,
+    )
+
+
 def _wrong_crop_response(
     crop: CropConfig,
     kb: KnowledgeBase,
@@ -499,6 +582,237 @@ def _wrong_crop_response(
     )
 
 
+def _crop_identity_fallback(
+    image_bytes: bytes,
+    crop: CropConfig,
+    kb: KnowledgeBase,
+    settings: Settings,
+) -> DetectResponse | None:
+    """Fallback crop check, consulted ONLY when the selected crop's own Roboflow model
+    found nothing of its crop. Does this photo strongly look like a *different*,
+    recognizable crop the classifier was trained on?
+
+    Fails open (returns None) on any error, when disabled, when the model/labels files
+    are missing, or when the result is inconclusive/low-confidence — in all those cases
+    the caller returns its normal "no disease / unclear photo" response instead.
+    """
+    gate = get_crop_gate(settings)
+    if gate is None:
+        return None
+    try:
+        pil = Image.open(BytesIO(image_bytes))
+        pil = ImageOps.exif_transpose(pil) or pil
+        pil = pil.convert("RGB")
+        pil.load()
+        detected_id, detected_score, crop_probs = gate.identify(pil, settings)
+    except Exception:
+        logger.exception("crop_gate: identify() failed, failing open")
+        return None
+
+    selected_covered = crop.id in COVERED_CROPS
+    selected_score = crop_probs.get(crop.id, 0.0)
+    top3 = sorted(crop_probs.items(), key=lambda kv: kv[1], reverse=True)[:3]
+    logger.info(
+        "crop_gate: selected=%s (covered=%s, self_score=%.3f) top=%s reject_if>=%.2f",
+        crop.id, selected_covered, selected_score,
+        [(c, round(p, 3)) for c, p in top3],
+        settings.crop_gate_uncovered_threshold if not selected_covered else settings.crop_gate_mismatch_threshold,
+    )
+
+    if detected_id is None or detected_id == crop.id:
+        return None
+
+    if selected_covered:
+        # Gate knows the selected crop: reject only if another crop clearly wins on both
+        # an absolute bar AND a margin over the selected crop's own aggregate score.
+        if detected_score < settings.crop_gate_mismatch_threshold:
+            return None
+        if (detected_score - selected_score) < settings.crop_gate_margin:
+            return None
+    else:
+        # Gate has no class for the selected crop (coffee/cassava/banana). It confidently
+        # mislabels genuine leaves of these crops (measured: real cassava -> beans 0.985),
+        # so gate rejection is disabled for them by default to avoid false-rejecting real
+        # photos. Falls through to the Roboflow + keyword-heuristic check instead.
+        if not settings.crop_gate_reject_uncovered:
+            return None
+        if detected_score < settings.crop_gate_uncovered_threshold:
+            return None
+
+    try:
+        detected_crop = get_crop(detected_id)
+    except ValueError:
+        return None
+    logger.warning(
+        "crop_gate: REJECTING selected=%s as %s (detected_score=%.3f, self_score=%.3f)",
+        crop.id, detected_id, detected_score, selected_score,
+    )
+    return _unsupported_crop_response(crop, detected_crop, kb, confidence=detected_score)
+
+
+def _unsupported_crop_response(
+    crop: CropConfig,
+    detected_crop: CropConfig,
+    kb: KnowledgeBase,
+    *,
+    confidence: float,
+) -> DetectResponse:
+    unk = kb.get("unknown")
+    detected_article = "an" if detected_crop.display_name[:1].lower() in "aeiou" else "a"
+    crop_article = "an" if crop.display_name[:1].lower() in "aeiou" else "a"
+    return DetectResponse(
+        result=DetectionResult(
+            diseaseName="Unsupported crop",
+            diseaseNameRw="Igihingwa kidashyigikiwe",
+            confidence=0.0,
+            type="unknown",
+            explanation=(
+                f"This looks like {detected_article} {detected_crop.display_name.lower()} leaf, not "
+                f"{crop.display_name.lower()}. Select {detected_crop.display_name} from the "
+                f"crop list, or upload {crop_article} {crop.display_name.lower()} leaf photo."
+            ),
+            explanationRw=(
+                f"Iyi ifoto isa n'ikibabi cy'{detected_crop.display_name.lower()}, si "
+                f"{crop.display_name.lower()}. Hitamo {detected_crop.display_name} ku rutonde, "
+                f"cyangwa ushyireho ifoto y'ikibabi cy'{crop.display_name.lower()}."
+            ),
+            treatment=unk.treatment,
+            treatmentRw=unk.treatmentRw,
+            prevention=unk.prevention,
+            preventionRw=unk.preventionRw,
+            care=unk.care,
+            careRw=unk.careRw,
+        ),
+        model_version=crop.model_version_label or "unknown",
+        request_id=str(uuid.uuid4()),
+        inference_mode="roboflow",
+        crop_id=crop.id,
+        top_class_id="unsupported_crop",
+        rejection_reason="unsupported_crop",
+        alternatives=[],
+        top_confidence_pct=0.0,
+        detections=[],
+        image_width=0,
+        image_height=0,
+        roboflow_model_id=None,
+    )
+
+
+_QUALITY_ISSUE_COPY: dict[str, tuple[str, str, str, str]] = {
+    "too_small": (
+        "Photo too small",
+        "Ifoto ni nto cyane",
+        "This image is too small/low-resolution to analyze reliably. Upload a larger photo.",
+        "Iyi foto ni nto cyane kugira ngo isesengurwe neza. Shyiraho ifoto nini.",
+    ),
+    "too_dark": (
+        "Photo too dark",
+        "Ifoto ni umwijima",
+        "This image is too dark to analyze reliably. Retake it in better daylight.",
+        "Iyi foto ni umwijima cyane. Ongera ufate ifoto mu mucyo mwiza.",
+    ),
+    "too_bright": (
+        "Photo overexposed",
+        "Ifoto irabagirana cyane",
+        "This image is too bright/washed out to analyze reliably. Avoid direct flash or harsh light.",
+        "Iyi foto irabagirana cyane. Wirinde flash cyangwa umucyo ukabije.",
+    ),
+    "blurry": (
+        "Photo too blurry",
+        "Ifoto ntisobanutse",
+        "This image is too blurry to analyze reliably. Hold the camera steady and refocus on the leaf.",
+        "Iyi foto ntisobanutse neza. Fata kamera itanyeganyega kandi wibande ku kibabi.",
+    ),
+}
+
+
+def _check_pre_inference_quality(
+    image_bytes: bytes,
+    crop: CropConfig,
+    kb: KnowledgeBase,
+    settings: Settings,
+) -> DetectResponse | None:
+    """Local pre-check: is this even a leaf photo, and is it clear enough to analyze?
+
+    Fails open (returns None) on any decode/inference error, mirroring the crop-identity
+    gate's contract — a broken check must never block the normal Roboflow pipeline.
+    """
+    try:
+        pil = Image.open(BytesIO(image_bytes))
+        pil = ImageOps.exif_transpose(pil) or pil
+        pil = pil.convert("RGB")
+        pil.load()
+    except Exception:
+        return None
+
+    version = crop.model_version_label or settings.model_version
+
+    if settings.plant_guard_enabled:
+        try:
+            is_scene = is_obvious_scene_photo(pil)
+            is_leaf = is_scene is False and looks_like_crop_leaf_photo(
+                pil, min_score=settings.plant_guard_min_score
+            )
+        except Exception:
+            is_scene, is_leaf = False, True
+        if is_scene or not is_leaf:
+            return _reject_response(
+                crop,
+                kb,
+                reason="plant_guard",
+                title_en="Not a crop leaf photo",
+                title_rw="Si ifoto y'ikibabi cy'igihingwa",
+                explanation_en=(
+                    "This does not look like a crop leaf. Upload a clear, close-up photo of "
+                    "one leaf in daylight — not a screenshot or document."
+                ),
+                explanation_rw=(
+                    "Ifoto ntiyirasa neza n'ikibabi. Shyiraho ifoto yegereye y'ikibabi kimwe "
+                    "mu mucyo mwiza."
+                ),
+                version=version,
+            )
+
+    if settings.image_quality_enabled:
+        try:
+            issue: QualityIssue | None = assess_image_quality(pil, settings)
+        except Exception:
+            issue = None
+        if issue is not None:
+            title_en, title_rw, expl_en, expl_rw = _QUALITY_ISSUE_COPY[issue.kind]
+            return _reject_response(
+                crop,
+                kb,
+                reason="image_quality",
+                title_en=title_en,
+                title_rw=title_rw,
+                explanation_en=expl_en,
+                explanation_rw=expl_rw,
+                version=version,
+            )
+
+    return None
+
+
+def _flip_image_bytes(image_bytes: bytes) -> bytes:
+    pil = Image.open(BytesIO(image_bytes))
+    pil = ImageOps.exif_transpose(pil) or pil
+    pil = pil.convert("RGB")
+    pil = ImageOps.mirror(pil)
+    out = BytesIO()
+    pil.save(out, format="JPEG", quality=95)
+    return out.getvalue()
+
+
+def _should_run_tta(primary_conf_pct: float, margin_pct: float, settings: Settings) -> bool:
+    if not settings.roboflow_tta_enabled:
+        return False
+    threshold_pct = settings.roboflow_confidence_threshold * 100.0
+    in_confidence_band = abs(primary_conf_pct - threshold_pct) <= settings.roboflow_tta_band_pct
+    in_margin_band = margin_pct <= settings.roboflow_tta_margin_trigger_pct
+    return in_confidence_band or in_margin_band
+
+
 def run_roboflow_detect(
     image_bytes: bytes,
     *,
@@ -512,6 +826,15 @@ def run_roboflow_detect(
 
     crop = get_crop(crop_id)
     kb = kb or _kb_for_crop(crop, settings)
+
+    # Two-signal crop check: we trust the selected crop's own Roboflow model first, and
+    # only consult the local crop-identity classifier as a fallback when that model finds
+    # NOTHING of its own crop (see the `if not preds` branch below). The local classifier
+    # is unreliable on real field photos, so it must never override a model that actually
+    # recognized its crop.
+    quality_response = _check_pre_inference_quality(image_bytes, crop, kb, settings)
+    if quality_response is not None:
+        return quality_response
 
     if crop.inference_kind == "workflow":
         raw, img_w, img_h = _call_roboflow_workflow(image_bytes, settings, crop)
@@ -537,40 +860,31 @@ def run_roboflow_detect(
         )
 
     if not preds:
-        unk = kb.get("unknown")
-        return DetectResponse(
-            result=DetectionResult(
-                diseaseName="No disease regions detected",
-                diseaseNameRw="Nta bice by'indwara byabonetse",
-                confidence=0.0,
-                type="unknown",
-                explanation=(
-                    f"No {crop.display_name.lower()} disease signs were found above the confidence threshold. "
-                    "Try a closer photo with visible symptoms."
-                ),
-                explanationRw=(
-                    f"Nta bimenyetso by'indwara bya {crop.display_name.lower()} byabonetse. "
-                    "Fata ifoto yegereye igaragaza ibimenyetso."
-                ),
-                treatment=unk.treatment,
-                treatmentRw=unk.treatmentRw,
-                prevention=unk.prevention,
-                preventionRw=unk.preventionRw,
-                care=unk.care,
-                careRw=unk.careRw,
+        # The selected crop's model recognized nothing of its own crop. This is the one
+        # place we consult the local classifier: if it strongly says this is a *different*,
+        # recognizable crop, reject as unsupported rather than a vague "no disease".
+        fallback = _crop_identity_fallback(image_bytes, crop, kb, settings)
+        if fallback is not None:
+            return fallback
+        return _reject_response(
+            crop,
+            kb,
+            reason="low_confidence",
+            title_en="No disease regions detected",
+            title_rw="Nta bice by'indwara byabonetse",
+            explanation_en=(
+                f"No {crop.display_name.lower()} disease signs were found above the confidence threshold. "
+                "Try a closer photo with visible symptoms."
             ),
-            model_version=version,
-            request_id=str(uuid.uuid4()),
-            inference_mode="roboflow",
-            crop_id=crop.id,
-            top_class_id="unknown",
-            rejection_reason="low_confidence",
-            alternatives=[],
-            top_confidence_pct=0.0,
+            explanation_rw=(
+                f"Nta bimenyetso by'indwara bya {crop.display_name.lower()} byabonetse. "
+                "Fata ifoto yegereye igaragaza ibimenyetso."
+            ),
+            version=version,
+            model_label=model_label,
             detections=boxes,
-            image_width=img_w,
-            image_height=img_h,
-            roboflow_model_id=model_label,
+            img_w=img_w,
+            img_h=img_h,
         )
 
     primary_name, primary_conf = _primary_class(preds)
@@ -594,6 +908,119 @@ def run_roboflow_detect(
                 disease_name=cname,
                 confidence=round(float(p.get("confidence", 0)) * 100.0, 1),
             )
+        )
+
+    margin_pct = (
+        alternatives[0].confidence - alternatives[1].confidence if len(alternatives) > 1 else 100.0
+    )
+
+    tta_ran = False
+    tta_agreed: bool | None = None
+    if _should_run_tta(primary_conf, margin_pct, settings):
+        tta_ran = True
+        try:
+            if crop.inference_kind == "workflow":
+                flip_raw, _, _ = _call_roboflow_workflow(_flip_image_bytes(image_bytes), settings, crop)
+            else:
+                flip_raw, _, _ = _call_roboflow_model(_flip_image_bytes(image_bytes), settings, crop)
+            flip_preds = _parse_predictions(flip_raw)
+        except Exception:
+            flip_preds = []
+        flip_name, flip_conf = _primary_class(flip_preds)
+        tta_agreed = bool(flip_preds) and _normalize_label(flip_name) == _normalize_label(primary_name)
+
+        if tta_agreed:
+            primary_conf = (primary_conf + flip_conf) / 2.0
+            if alternatives:
+                alternatives[0] = ClassAlternative(
+                    class_id=alternatives[0].class_id,
+                    disease_name=alternatives[0].disease_name,
+                    confidence=round(primary_conf, 1),
+                )
+        else:
+            flip_alternatives = [
+                ClassAlternative(class_id=primary_name, disease_name=primary_name, confidence=round(primary_conf, 1))
+            ]
+            if flip_preds:
+                flip_alternatives.append(
+                    ClassAlternative(class_id=flip_name, disease_name=flip_name, confidence=round(flip_conf, 1))
+                )
+            return _reject_response(
+                crop,
+                kb,
+                reason="unstable_prediction",
+                title_en="Uncertain — inconsistent result",
+                title_rw="Ntibizwi neza — ibisubizo bitahuye",
+                explanation_en=(
+                    "The model gave different results on repeated checks of this photo. "
+                    "Retake it with steady hands, good daylight, and one leaf filling the frame."
+                ),
+                explanation_rw=(
+                    "Moderi yatanze ibisubizo bitandukanye igihe yongeye kureba iyi foto. "
+                    "Ongera ufate ifoto neza, mu mucyo mwiza, ikibabi kimwe kikuzuza ifoto."
+                ),
+                version=version,
+                model_label=model_label,
+                alternatives=flip_alternatives,
+                detections=boxes,
+                img_w=img_w,
+                img_h=img_h,
+                tta_ran=tta_ran,
+                tta_agreed=False,
+            )
+
+    if primary_conf < settings.roboflow_confidence_threshold * 100.0:
+        return _reject_response(
+            crop,
+            kb,
+            reason="low_confidence",
+            title_en="Uncertain — try a clearer photo",
+            title_rw="Ntibizwi — ongera ugerageze",
+            explanation_en=(
+                "The model could not confirm a disease with enough confidence. Fill the frame "
+                "with one leaf, hold steady, use even daylight, and show visible spots or "
+                "discoloration if present."
+            ),
+            explanation_rw=(
+                "Moderi ntiyemeza indwara n'ukuri kuhagije. Fata ifoto y'ikibabi kimwe mu mucyo "
+                "mwiza, igaragaza ibimenyetso niba bihari."
+            ),
+            version=version,
+            model_label=model_label,
+            top_confidence_pct=primary_conf,
+            alternatives=alternatives[:5],
+            detections=boxes,
+            img_w=img_w,
+            img_h=img_h,
+            tta_ran=tta_ran,
+            tta_agreed=tta_agreed,
+        )
+
+    if margin_pct < settings.roboflow_margin_threshold * 100.0:
+        return _reject_response(
+            crop,
+            kb,
+            reason="low_margin",
+            title_en="Similar conditions — need a sharper photo",
+            title_rw="Indwara zisa — ongera ugerageze",
+            explanation_en=(
+                "Two or more conditions look equally likely. Take a sharper close-up of the "
+                "affected area only (one leaf, symptoms in focus)."
+            ),
+            explanation_rw=(
+                "Indwara zirenze imwe zisa. Fata ifoto yegereye, isobanutse, yerekana gusa "
+                "ahantu hari ibimenyetso."
+            ),
+            version=version,
+            model_label=model_label,
+            top_confidence_pct=primary_conf,
+            confidence_margin_pct=margin_pct,
+            alternatives=alternatives[:5],
+            detections=boxes,
+            img_w=img_w,
+            img_h=img_h,
+            tta_ran=tta_ran,
+            tta_agreed=tta_agreed,
         )
 
     if kb_id:
@@ -637,6 +1064,9 @@ def run_roboflow_detect(
         rejection_reason=None,
         alternatives=alternatives[:12],
         top_confidence_pct=round(primary_conf, 1),
+        confidence_margin_pct=round(margin_pct, 1),
+        tta_ran=tta_ran,
+        tta_agreed=tta_agreed,
         detections=boxes,
         image_width=img_w,
         image_height=img_h,

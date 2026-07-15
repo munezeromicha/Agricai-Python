@@ -1,7 +1,10 @@
 import json
+import logging
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -95,10 +98,10 @@ def create_app() -> FastAPI:
                 inference_mode="roboflow",
                 input_size=settings.input_size,
                 num_classes=kb.num_trainable_classes,
-                plant_guard_enabled=False,
-                tta_enabled=False,
+                plant_guard_enabled=settings.plant_guard_enabled,
+                tta_enabled=settings.roboflow_tta_enabled,
                 confidence_threshold=settings.roboflow_confidence_threshold,
-                confidence_margin=0.0,
+                confidence_margin=settings.roboflow_margin_threshold,
                 val_accuracy_pct=None,
                 target_accuracy_pct=98.0,
             )

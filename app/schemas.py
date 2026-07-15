@@ -7,6 +7,9 @@ RejectionReason = Literal[
     "plant_guard",
     "not_tomato",
     "wrong_crop",
+    "unsupported_crop",
+    "image_quality",
+    "unstable_prediction",
     "low_confidence",
     "low_margin",
     "class_count_mismatch",
@@ -63,6 +66,8 @@ class DetectResponse(BaseModel):
     confidence_margin_pct: float | None = None
     tomato_gate_score_pct: float | None = None
     tomato_gate_soft_pass: bool | None = None
+    tta_ran: bool | None = None
+    tta_agreed: bool | None = None
     detections: list[DetectionBox] = Field(default_factory=list)
     image_width: int | None = None
     image_height: int | None = None

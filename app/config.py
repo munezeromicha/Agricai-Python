@@ -64,6 +64,27 @@ class Settings(BaseSettings):
     # When plant-guard leaf score is this high, run disease model even if gate score is low.
     tomato_gate_bypass_min_leaf_score: float = 0.62
 
+    # Stage 0 — multi-crop identity gate (local ONNX classifier, runs before the Roboflow call).
+    # Covers 8/11 crops: tomato, beans, maize, mango, onion, orange, potato, tea.
+    crop_gate_enabled: bool = True
+    crop_gate_path: str | None = "model/archive/crop_classifier.onnx"
+    crop_gate_labels_path: str | None = "model/class_names.json"
+    # Crop-identity gate thresholds. These now apply to the *aggregated per-crop*
+    # probability (all of a crop's classes summed), not a single diluted class score.
+    # When the SELECTED crop is one the gate was trained on (tomato/beans/maize/mango/
+    # onion/orange/potato/tea): reject only if some OTHER crop's aggregate score clears
+    # this bar AND beats the selected crop's own score by crop_gate_margin.
+    crop_gate_mismatch_threshold: float = 0.60
+    crop_gate_margin: float = 0.25
+    # When the SELECTED crop is one the gate can't see (coffee/cassava/banana): the
+    # classifier has no class for it and was measured confidently mislabeling genuine
+    # cassava leaves as "beans" at 0.985 — indistinguishable from a real maize leaf at
+    # 1.000. So gate-based rejection is OFF for these crops by default (it would false-
+    # reject real farmers' photos). They fall through to the Roboflow + keyword check.
+    # Set True only if you accept that risk; then UNCOVERED_THRESHOLD must be very high.
+    crop_gate_reject_uncovered: bool = False
+    crop_gate_uncovered_threshold: float = 0.99
+
     # 11-class model: reject when Not_Tomato probability is competitive with top disease
     not_tomato_compete_threshold: float = 0.28
     not_tomato_compete_margin: float = 0.18
@@ -77,6 +98,30 @@ class Settings(BaseSettings):
     roboflow_api_confidence_pct: int = 10
     roboflow_iou_threshold: float = 0.50
     roboflow_workspace_name: str = "pro-grammer"
+
+    # Reject Roboflow-path uploads that fail local blur/resolution/brightness checks
+    # before spending an API call (needs real-world tuning once you have field photos).
+    image_quality_enabled: bool = True
+    image_quality_blur_variance_threshold: float = 60.0
+    image_quality_min_edge_px: int = 200
+    image_quality_min_mean_luma: float = 25.0
+    image_quality_max_mean_luma: float = 235.0
+
+    # Roboflow-path margin check (top-1 vs top-2 class), analogous to CONFIDENCE_MARGIN
+    # above but kept separate since Roboflow's confidence distribution differs from the
+    # local model's softmax.
+    roboflow_margin_threshold: float = 0.10
+
+    # Adaptive test-time augmentation: only fires a second (horizontally-flipped)
+    # Roboflow call when the first call's result is borderline, to bound added
+    # API cost/latency to genuinely uncertain cases.
+    roboflow_tta_enabled: bool = True
+    # Trigger band (percentage points) around roboflow_confidence_threshold*100.
+    roboflow_tta_band_pct: float = 15.0
+    # Also trigger when the top-1/top-2 margin is at or below this many points, even
+    # at high confidence (wider than roboflow_margin_threshold so genuinely-close
+    # calls get a second look before they'd otherwise reach the margin-reject check).
+    roboflow_tta_margin_trigger_pct: float = 20.0
 
     @property
     def project_root(self) -> Path:
@@ -103,6 +148,22 @@ class Settings(BaseSettings):
         if not self.tomato_gate_path:
             return None
         p = Path(self.tomato_gate_path)
+        if not p.is_absolute():
+            p = self.project_root / p
+        return p
+
+    def resolved_crop_gate_path(self) -> Path | None:
+        if not self.crop_gate_path:
+            return None
+        p = Path(self.crop_gate_path)
+        if not p.is_absolute():
+            p = self.project_root / p
+        return p
+
+    def resolved_crop_gate_labels_path(self) -> Path | None:
+        if not self.crop_gate_labels_path:
+            return None
+        p = Path(self.crop_gate_labels_path)
         if not p.is_absolute():
             p = self.project_root / p
         return p
