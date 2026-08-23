@@ -4,6 +4,9 @@ This document explains **how to organize image datasets** so they work with AGRI
 
 Use it when you collect or download datasets for **new crops** (maize, beans, avocado, etc.) or when you expand the existing **tomato** dataset.
 
+**Where to download data for each crop you already support:** see [DATASET_SOURCES.md](./DATASET_SOURCES.md).  
+**How to build `train/` + `validation/` + `Not_<Crop>/` automatically:** `python scripts/prepare_crop_dataset.py --help`.
+
 ---
 
 ## 1. Top-level layout (required)

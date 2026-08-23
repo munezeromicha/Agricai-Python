@@ -1,6 +1,8 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.inference.confidence import confidence_guidance, confidence_level
 
 DiseaseType = Literal["healthy", "disease", "pest", "unknown"]
 RejectionReason = Literal[
@@ -73,6 +75,27 @@ class DetectResponse(BaseModel):
     image_height: int | None = None
     roboflow_model_id: str | None = None
     crop_id: str | None = None
+    #: Band derived from `top_confidence_pct` + `confidence_margin_pct` — the app shows
+    #: this word rather than making each client re-derive its own thresholds.
+    confidence_level: Literal["high", "medium", "low", "very_low"] = "very_low"
+    confidence_guidance: str = ""
+    confidence_guidance_rw: str = ""
+    actionable: bool = False
+
+    @model_validator(mode="after")
+    def _derive_confidence(self) -> "DetectResponse":
+        # A rejected result carries no usable diagnosis, so it never reports a band above very_low.
+        if self.rejection_reason is not None or self.result.type == "unknown":
+            level = "very_low"
+        else:
+            score = self.top_confidence_pct if self.top_confidence_pct is not None else self.result.confidence
+            level = confidence_level(score, self.confidence_margin_pct)
+        en, rw = confidence_guidance(level)
+        object.__setattr__(self, "confidence_level", level)
+        object.__setattr__(self, "confidence_guidance", en)
+        object.__setattr__(self, "confidence_guidance_rw", rw)
+        object.__setattr__(self, "actionable", level in ("high", "medium"))
+        return self
 
 
 class CropSummary(BaseModel):
